@@ -19,6 +19,14 @@ val gitCommitCount: Provider<Int> = providers.exec {
 val releaseKeystore = rootProject.file("release.jks")
 val hasReleaseKeystore = releaseKeystore.exists()
 
+/**
+ * Parolele vin din `-Pchecker.storePassword=...` (local) sau din variabile de
+ * mediu (CI). Nu se citesc doar din mediu: un GradleDaemon deja pornit nu
+ * primește variabilele noi, iar semnarea ar cădea cu „password was incorrect”.
+ */
+fun signingValue(property: String, env: String): String =
+    providers.gradleProperty(property).orNull ?: System.getenv(env).orEmpty()
+
 android {
     namespace = "ro.davinci.checker"
     compileSdk = 36
@@ -35,9 +43,10 @@ android {
         if (hasReleaseKeystore) {
             create("release") {
                 storeFile = releaseKeystore
-                storePassword = System.getenv("RELEASE_STORE_PASSWORD").orEmpty()
-                keyAlias = System.getenv("RELEASE_KEY_ALIAS") ?: "checker"
-                keyPassword = System.getenv("RELEASE_KEY_PASSWORD").orEmpty()
+                storePassword = signingValue("checker.storePassword", "RELEASE_STORE_PASSWORD")
+                keyAlias = providers.gradleProperty("checker.keyAlias").orNull
+                    ?: System.getenv("RELEASE_KEY_ALIAS") ?: "checker"
+                keyPassword = signingValue("checker.keyPassword", "RELEASE_KEY_PASSWORD")
             }
         }
     }

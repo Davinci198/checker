@@ -134,17 +134,25 @@ dă ~2,8% și p90 = 11 ms. Pentru senzația reală se folosește release-ul.
 
 ## Release semnat
 
+**Build-ul de release se face pe GitHub Actions, nu pe telefon** — R8 + release
+țin CPU-ul la 100% minute întregi și telefonul se încălzește. Local rămâne doar
+pentru verificare rapidă a unui `assembleDebug`.
+
 Release-ul folosește `ro.davinci.checker` (fără sufix) și un keystore propriu,
 ca update-urile să se instaleze **peste** versiunea existentă, fără dezinstalare:
 
 ```bash
 cp ~/9remote-uploads/opencode/checker-keys/checker-release.jks release.jks   # gitignored
-export RELEASE_STORE_PASSWORD=$(grep storePassword ~/9remote-uploads/opencode/checker-keys/passwords.txt | cut -d= -f2)
-export RELEASE_KEY_PASSWORD=$RELEASE_STORE_PASSWORD
-export RELEASE_KEY_ALIAS=checker
-./gradlew :app:assembleRelease -Pandroid.aapt2FromMavenOverride=$(which aapt2)
+PW=$(grep storePassword ~/9remote-uploads/opencode/checker-keys/passwords.txt | cut -d= -f2)
+./gradlew :app:assembleRelease -Pandroid.aapt2FromMavenOverride=$(which aapt2) \
+  -Pchecker.storePassword="$PW" -Pchecker.keyPassword="$PW" -Pchecker.keyAlias=checker
 adb install -r app/build/outputs/apk/release/app-release.apk
 ```
+
+Parolele se dau ca proprietăți (`-Pchecker.*`) sau, în CI, ca variabile de mediu
+(`RELEASE_STORE_PASSWORD`, `RELEASE_KEY_PASSWORD`, `RELEASE_KEY_ALIAS`) — nu
+doar din mediu local, fiindcă un `GradleDaemon` deja pornit nu primește
+variabilele noi și semnarea cade cu „keystore password was incorrect”.
 
 Fără `release.jks` build-ul rămâne nesemnat (`app-release-unsigned.apk`), util
 doar pentru inspecție — nu se poate instala.
