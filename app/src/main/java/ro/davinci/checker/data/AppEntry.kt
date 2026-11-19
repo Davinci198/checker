@@ -31,12 +31,18 @@ data class AppEntry(
     /** Memoria care poate fi pusă pe seama acestui pachet (nu e partajată). */
     val ownRssKb: Long get() = if (sharedUid) 0 else rssKb
 
-    /** Cheltuie memorie (RSS) agregată pe toate procesele pachetului. */
-    val memoryLabel: String get() = when {
-        sharedUid && running -> "partajat"
+    /**
+     * Textul de memorie, calculat o dată la scanare.
+     * `String.format` e scump, iar rândul din listă îl citea la fiecare compunere.
+     */
+    val memoryLabel: String = when {
+        sharedUid && pids.isNotEmpty() -> "partajat"
         rssKb > 0 -> formatKb(rssKb)
         else -> ""
     }
+
+    /** Primul PID, gata de afișat. */
+    val pidLabel: String = pids.firstOrNull()?.let { "PID $it" }.orEmpty()
 
     /** Poate fi oprită fără să afecteze telefonul, cât timp rulează. */
     val safeToStop: Boolean get() = safety == StopSafety.SAFE

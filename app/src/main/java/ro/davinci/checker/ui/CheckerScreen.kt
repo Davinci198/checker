@@ -227,7 +227,9 @@ fun CheckerApp(vm: CheckerViewModel) {
 
             Spacer(Modifier.height(6.dp))
 
-            val visible = ui.visible()
+            val visible = remember(ui.apps, ui.query, ui.filter, ui.sortMode, ui.foregroundPackage) {
+                ui.visible()
+            }
             if (visible.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
@@ -245,7 +247,11 @@ fun CheckerApp(vm: CheckerViewModel) {
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(bottom = 32.dp),
                 ) {
-                    items(visible, key = { it.packageName }) { app ->
+                    items(
+                        items = visible,
+                        key = { it.packageName },
+                        contentType = { "app" },
+                    ) { app ->
                         AppRow(
                             app = app,
                             isForeground = app.packageName == ui.foregroundPackage,
@@ -568,16 +574,16 @@ private fun AppRow(
         }
 
         Column(horizontalAlignment = Alignment.End) {
-            if (app.rssKb > 0) {
+            if (app.memoryLabel.isNotEmpty()) {
                 Text(
                     text = app.memoryLabel,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (app.pids.isNotEmpty()) {
+            if (app.pidLabel.isNotEmpty()) {
                 Text(
-                    text = "PID ${app.pids.first()}",
+                    text = app.pidLabel,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
