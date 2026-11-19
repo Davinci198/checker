@@ -9,14 +9,46 @@ instalate pe telefon. Interfața este integral în română.
   **utilizator**.
 - Arată **ce rulează**: procesele aparținând fiecărui pachet (prin UID), memoria
   ocupată (RSS) și dacă aplicația este în **prim-plan** sau în **fundal**.
+- **Sortează după memorie** — în tab-urile Rulează / Fundal / Oprire sigură
+  lista e ordonată descrescător după RSS, cu totalul de memorie afișat sus.
+- Spune **ce se poate opri în siguranță**: fiecare aplicație primește un verdict
+  (oprire sigură / atenție / nu opri) și motivul lui, iar filtrul
+  **Oprire sigură** arată doar aplicațiile care pot fi oprite fără efecte.
 - **Îngheață** (`pm disable-user --user 0`) și **dezgheață** (`pm enable`)
   aplicații.
 - **Dezinstalează** — și, implicit, face întâi o **copie a APK-urilor** în
   `Download/Checker/apk-backup/<pachet>/<data>/`.
 - **Reinstalează** din copie, inclusiv pachetele cu split-uri
   (`pm install-create` → `install-write` → `install-commit`).
-- Filtre: Toate / Rulează / Fundal / Utilizator / Sistem / Înghețate, plus
-  căutare după nume sau pachet.
+- Filtre: Toate / Rulează / Fundal / Oprire sigură / Utilizator / Sistem /
+  Înghețate, plus căutare după nume sau pachet.
+
+## Siguranța la oprire
+
+Verdictul nu e o presupunere: se calculează din rolurile pe care sistemul le dă
+pachetului și din starea lui reală.
+
+| Verdict | Când | Exemple |
+|---|---|---|
+| **Nu opri** | UID de sistem (< 10000), proces persistent, lansatorul, tastatura implicită, aplicația de apeluri sau de SMS, serviciu de accesibilitate activ, administrator de dispozitiv | SystemUI, Messages, launcher-ul |
+| **Oprește doar temporar** | are serviciu în prim-plan sau e aplicație de sistem | muzică, descărcări, navigație, GMS |
+| **Poți opri în siguranță** | aplicație de utilizator, fără serviciu în prim-plan, fără rol critic | aplicații obișnuite din fundal |
+
+Rolurile critice se citesc din `Settings.Secure` (`default_input_method`,
+`enabled_accessibility_services`), din `TelecomManager`, `Telephony.Sms`,
+`DevicePolicyManager` și din rezolvarea intenției `CATEGORY_HOME`; serviciile în
+prim-plan vin dintr-o singură citire `dumpsys activity services`, filtrată pe
+`isForeground=true`.
+
+Fiecare fișă de aplicație arată și informații despre pachet: versiune, UID,
+procese, memorie, SDK țintă/minim, data instalării și a ultimei actualizări,
+sursa instalării (`com.android.vending`, `com.google.android.packageinstaller`
+etc.), numărul de permisiuni cerute și câte sunt periculoase, dacă are iconiță
+în sertar și dacă are serviciu în prim-plan.
+
+**Memoria partajată:** pachetele care împart un UID (de exemplu uid 1000, adică
+`system_server`) raportează aceleași procese. Aplicația le arată ca „partajat” și
+nu le mai adună la total, ca să nu apară sume umflate.
 
 ## Cum obține privilegii
 
@@ -59,7 +91,8 @@ app/src/main/java/ro/davinci/checker/
 │   ├── LocalShell.kt                    # fallback fără privilegii
 │   └── ShellController.kt               # alege backend-ul, ține starea
 ├── data/
-│   ├── AppEntry.kt / AppScanner.kt      # pachete, procese, prim-plan
+│   ├── AppEntry.kt / AppScanner.kt      # pachete, procese, prim-plan, informații
+│   ├── AppSafety.kt                     # verdict de oprire + rolurile critice
 │   ├── AppActions.kt                    # îngheață / dezgheață / force-stop
 │   ├── ApkBackup.kt                     # copie APK + reinstalare
 │   └── IconCache.kt                     # icoane LRU pentru listă

@@ -25,9 +25,17 @@ enum class AppFilter(val label: String) {
     ALL("Toate"),
     RUNNING("Rulează"),
     BACKGROUND("Fundal"),
+    SAFE_STOP("Oprire sigură"),
     USER("Utilizator"),
     SYSTEM("Sistem"),
     FROZEN("Înghețate"),
+}
+
+/** Ordinea listei. `AUTO` alege memoria pentru tab-urile de procese. */
+enum class SortMode(val label: String) {
+    AUTO("Automat"),
+    RAM("Memorie"),
+    NAME("Nume"),
 }
 
 data class UiState(
@@ -38,6 +46,7 @@ data class UiState(
     val backups: List<ApkBackup.Entry> = emptyList(),
     val query: String = "",
     val filter: AppFilter = AppFilter.ALL,
+    val sortMode: SortMode = SortMode.AUTO,
     val loading: Boolean = false,
     val busyLabel: String? = null,
     val message: String? = null,
@@ -48,9 +57,18 @@ data class UiState(
 ) {
     val connected: Boolean get() = connection is ShellController.State.Connected
 
+    /** Ce ordine se aplică efectiv pentru filtrul curent. */
+    fun effectiveSort(): SortMode = when (sortMode) {
+        SortMode.AUTO ->
+            if (filter == AppFilter.RUNNING || filter == AppFilter.BACKGROUND ||
+                filter == AppFilter.SAFE_STOP
+            ) SortMode.RAM else SortMode.NAME
+        else -> sortMode
+    }
+
     fun visible(): List<AppEntry> {
         val term = query.trim().lowercase()
-        return apps.filter { app ->
+        val filtered = apps.filter { app ->
             val matchesQuery = term.isEmpty() ||
                 app.label.lowercase().contains(term) ||
                 app.packageName.lowercase().contains(term)
@@ -59,11 +77,22 @@ data class UiState(
                 AppFilter.ALL -> true
                 AppFilter.RUNNING -> app.running
                 AppFilter.BACKGROUND -> app.running && app.packageName != foregroundPackage
+                AppFilter.SAFE_STOP -> app.running && app.safeToStop
                 AppFilter.USER -> !app.isSystem
                 AppFilter.SYSTEM -> app.isSystem
                 AppFilter.FROZEN -> app.isFrozen
             }
             matchesQuery && matchesFilter
+        }
+
+        return when (effectiveSort()) {
+            SortMode.RAM -> filtered.sortedWith(
+                compareByDescending<AppEntry> { it.ownRssKb }
+                    .thenBy { it.label.lowercase() },
+            )
+            else -> filtered.sortedWith(
+                compareBy<AppEntry> { it.isFrozen }.thenBy { it.label.lowercase() },
+            )
         }
     }
 
@@ -72,10 +101,17 @@ data class UiState(
         AppFilter.RUNNING -> apps.count { it.running }
         AppFilter.BACKGROUND ->
             apps.count { it.running && it.packageName != foregroundPackage }
+        AppFilter.SAFE_STOP -> apps.count { it.running && it.safeToStop }
         AppFilter.USER -> apps.count { !it.isSystem }
         AppFilter.SYSTEM -> apps.count { it.isSystem }
         AppFilter.FROZEN -> apps.count { it.isFrozen }
     }
+
+    /** Memoria ocupată de procesele aplicațiilor, fără UID-uri partajate. */
+    val runningMemoryKb: Long
+        get() = apps.asSequence()
+            .filter { it.running && !it.sharedUid }
+            .sumOf { it.rssKb }
 }
 
 class CheckerViewModel(application: Application) : AndroidViewModel(application) {
@@ -377,6 +413,10 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
 
     fun setFilter(filter: AppFilter) {
         _ui.value = _ui.value.copy(filter = filter)
+    }
+
+    fun setSort(mode: SortMode) {
+        _ui.value = _ui.value.copy(sortMode = mode)
     }
 
     fun clearMessage() {

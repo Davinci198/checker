@@ -26,6 +26,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Block
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Folder
@@ -86,9 +88,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import ro.davinci.checker.AppFilter
 import ro.davinci.checker.CheckerViewModel
+import ro.davinci.checker.SortMode
 import ro.davinci.checker.UiState
 import ro.davinci.checker.data.AppEntry
 import ro.davinci.checker.data.IconCache
+import ro.davinci.checker.data.StopSafety
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -209,6 +213,18 @@ fun CheckerApp(vm: CheckerViewModel) {
                 }
             }
 
+            SortRow(ui = ui, onSort = vm::setSort)
+
+            if (ui.filter == AppFilter.SAFE_STOP) {
+                Text(
+                    text = "Aplicații de utilizator care rulează acum, fără serviciu în prim-plan " +
+                        "și fără rol critic (lansator, tastatură, telefon, SMS).",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                )
+            }
+
             Spacer(Modifier.height(6.dp))
 
             val visible = ui.visible()
@@ -233,6 +249,9 @@ fun CheckerApp(vm: CheckerViewModel) {
                         AppRow(
                             app = app,
                             isForeground = app.packageName == ui.foregroundPackage,
+                            showSafety = ui.filter == AppFilter.RUNNING ||
+                                ui.filter == AppFilter.BACKGROUND ||
+                                ui.filter == AppFilter.SAFE_STOP,
                             onClick = { selectedPackage = app.packageName },
                         )
                     }
@@ -439,7 +458,66 @@ private fun ConnectionDialog(
 }
 
 @Composable
-private fun AppRow(app: AppEntry, isForeground: Boolean, onClick: () -> Unit) {
+private fun SortRow(ui: UiState, onSort: (SortMode) -> Unit) {
+    val runningView = ui.filter == AppFilter.RUNNING ||
+        ui.filter == AppFilter.BACKGROUND ||
+        ui.filter == AppFilter.SAFE_STOP
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Text(
+            "Sortează:",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        SortChip("Memorie", ui.effectiveSort() == SortMode.RAM) { onSort(SortMode.RAM) }
+        SortChip("Nume", ui.effectiveSort() == SortMode.NAME) { onSort(SortMode.NAME) }
+
+        Spacer(Modifier.weight(1f))
+
+        if (runningView) {
+            Text(
+                text = AppEntry.formatKb(ui.runningMemoryKb),
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SortChip(text: String, selected: Boolean, onClick: () -> Unit) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(text, style = MaterialTheme.typography.labelMedium) },
+        colors = FilterChipDefaults.filterChipColors(
+            selectedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+            selectedLabelColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        ),
+    )
+}
+
+@Composable
+private fun safetyColor(safety: StopSafety): Color = when (safety) {
+    StopSafety.SAFE -> CheckerGreen
+    StopSafety.CAUTION -> CheckerAmber
+    StopSafety.NEVER -> CheckerRed
+}
+
+@Composable
+private fun AppRow(
+    app: AppEntry,
+    isForeground: Boolean,
+    showSafety: Boolean,
+    onClick: () -> Unit,
+) {
     val context = LocalContext.current
     val icon by produceState<ImageBitmap?>(initialValue = null, key1 = app.packageName) {
         value = withContext(Dispatchers.IO) { IconCache.load(context, app.packageName) }
@@ -483,13 +561,16 @@ private fun AppRow(app: AppEntry, isForeground: Boolean, onClick: () -> Unit) {
                 if (app.isFrozen) Badge("îngheţat", CheckerRed)
                 if (isForeground) Badge("prim-plan", CheckerAmber)
                 else if (app.running) Badge("fundal", CheckerGreen)
+                if (showSafety && app.running) {
+                    Badge(app.safety.short, safetyColor(app.safety))
+                }
             }
         }
 
         Column(horizontalAlignment = Alignment.End) {
             if (app.rssKb > 0) {
                 Text(
-                    text = AppEntry.formatKb(app.rssKb),
+                    text = app.memoryLabel,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -569,9 +650,32 @@ private fun AppDetailSheet(
             KeyValueRow("UID", app.uid.toString())
             KeyValueRow("Versiune", app.versionName)
             KeyValueRow("Procese", if (app.pids.isEmpty()) "—" else app.pids.joinToString(", "))
-            KeyValueRow("Memorie", if (app.rssKb > 0) AppEntry.formatKb(app.rssKb) else "—")
+            KeyValueRow("Memorie", if (app.rssKb > 0) app.memoryLabel else "—")
             KeyValueRow("Fișiere APK", app.apkPaths.size.toString())
+            KeyValueRow("SDK", if (app.targetSdk > 0) "${app.targetSdk} (min ${app.minSdk})" else "—")
+            KeyValueRow("Instalat", CheckerViewModel.formatDate(app.installedAt))
             KeyValueRow("Actualizat", CheckerViewModel.formatDate(app.updatedAt))
+            KeyValueRow("Sursă", app.installer ?: "necunoscută")
+            KeyValueRow(
+                "Permisiuni",
+                if (app.permissionCount > 0) {
+                    "${app.permissionCount} cerute, ${app.dangerousPermissions} periculoase"
+                } else {
+                    "niciuna"
+                },
+            )
+            KeyValueRow(
+                "Interfață",
+                if (app.hasLaunchIntent) "are iconiță în sertar" else "fără activitate de lansare",
+            )
+            KeyValueRow(
+                "Serviciu prim-plan",
+                if (app.hasForegroundService) "da" else "nu",
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            SafetyCard(app)
 
             Spacer(Modifier.height(14.dp))
 
@@ -593,7 +697,11 @@ private fun AppDetailSheet(
 
             if (app.running) {
                 ActionButton(
-                    text = "Oprește procesele",
+                    text = when (app.safety) {
+                        StopSafety.SAFE -> "Oprește procesele"
+                        StopSafety.CAUTION -> "Oprește temporar procesele"
+                        StopSafety.NEVER -> "Oprește forțat (nerecomandat)"
+                    },
                     icon = Icons.Default.Stop,
                     enabled = connected,
                     onClick = onForceStop,
@@ -636,6 +744,45 @@ private fun AppDetailSheet(
                 Spacer(Modifier.width(8.dp))
                 Text("Dezinstalează")
             }
+        }
+    }
+}
+
+@Composable
+private fun SafetyCard(app: AppEntry) {
+    val color = safetyColor(app.safety)
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.10f)),
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = if (app.safety == StopSafety.NEVER) {
+                        Icons.Default.Block
+                    } else if (app.safety == StopSafety.CAUTION) {
+                        Icons.Default.Warning
+                    } else {
+                        Icons.Default.CheckCircle
+                    },
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = color,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = app.safety.label,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = color,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = app.safetyReason,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
         }
     }
 }
