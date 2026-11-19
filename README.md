@@ -16,12 +16,23 @@ instalate pe telefon. Interfața este integral în română.
   **Oprire sigură** arată doar aplicațiile care pot fi oprite fără efecte.
 - **Îngheață** (`pm disable-user --user 0`) și **dezgheață** (`pm enable`)
   aplicații.
+- **Oprește mai multe deodată**: apăsare lungă pe un rând intră în modul de
+  selecție, apeși pe câte aplicații vrei, apoi **Oprește (N)** le oprește pe
+  toate dintr-un singur tap. Se raportează câte au reușit și câtă memorie s-a
+  eliberat.
+- **Lista albă și lista neagră**, ambele persistente:
+  - **lista albă** = aplicații protejate; nu se opresc nici individual, nici în
+    masă, iar verdictul lor devine „Nu opri”;
+  - **lista neagră** = aplicațiile pe care le oprești mereu; au filtru propriu,
+    ca să le oprești împreună dintr-un tap.
+  Un pachet stă într-o singură listă — adăugarea într-una îl scoate din cealaltă.
+  Se adaugă din fișa aplicației sau pe lot, din modul de selecție.
 - **Dezinstalează** — și, implicit, face întâi o **copie a APK-urilor** în
   `Download/Checker/apk-backup/<pachet>/<data>/`.
 - **Reinstalează** din copie, inclusiv pachetele cu split-uri
   (`pm install-create` → `install-write` → `install-commit`).
 - Filtre: Toate / Rulează / Fundal / Oprire sigură / Utilizator / Sistem /
-  Înghețate, plus căutare după nume sau pachet.
+  Înghețate / Listă albă / Listă neagră, plus căutare după nume sau pachet.
 
 ## Siguranța la oprire
 

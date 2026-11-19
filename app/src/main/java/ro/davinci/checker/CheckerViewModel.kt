@@ -15,7 +15,9 @@ import rikka.shizuku.Shizuku
 import ro.davinci.checker.data.ApkBackup
 import ro.davinci.checker.data.AppActions
 import ro.davinci.checker.data.AppEntry
+import ro.davinci.checker.data.AppLists
 import ro.davinci.checker.data.AppScanner
+import ro.davinci.checker.data.StopSafety
 import ro.davinci.checker.shell.ShellController
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -29,6 +31,8 @@ enum class AppFilter(val label: String) {
     USER("Utilizator"),
     SYSTEM("Sistem"),
     FROZEN("Înghețate"),
+    WHITELIST("Listă albă"),
+    BLACKLIST("Listă neagră"),
 }
 
 /** Ordinea listei. `AUTO` alege memoria pentru tab-urile de procese. */
@@ -47,6 +51,9 @@ data class UiState(
     val query: String = "",
     val filter: AppFilter = AppFilter.ALL,
     val sortMode: SortMode = SortMode.AUTO,
+    val whiteList: Set<String> = emptySet(),
+    val blackList: Set<String> = emptySet(),
+    val selection: Set<String> = emptySet(),
     val loading: Boolean = false,
     val busyLabel: String? = null,
     val message: String? = null,
@@ -56,6 +63,27 @@ data class UiState(
     val warning: String? = null,
 ) {
     val connected: Boolean get() = connection is ShellController.State.Connected
+
+    /** Selecția e activă cât timp există cel puțin un pachet ales. */
+    val selecting: Boolean get() = selection.isNotEmpty()
+
+    /**
+     * Verdictul care se afișează: lista albă are întâietate față de orice
+     * calcul, fiindcă e o decizie explicită a utilizatorului.
+     */
+    fun safetyOf(app: AppEntry): StopSafety =
+        if (app.packageName in whiteList) StopSafety.NEVER else app.safety
+
+    fun safetyReasonOf(app: AppEntry): String =
+        if (app.packageName in whiteList) {
+            "Este în lista albă: aplicația nu se oprește nici individual, nici în masă."
+        } else {
+            app.safetyReason
+        }
+
+    /** Poate fi oprită fără să afecteze telefonul (ține cont și de lista albă). */
+    fun safeToStop(app: AppEntry): Boolean =
+        safetyOf(app) == StopSafety.SAFE
 
     /** Ce ordine se aplică efectiv pentru filtrul curent. */
     fun effectiveSort(): SortMode = when (sortMode) {
@@ -77,10 +105,12 @@ data class UiState(
                 AppFilter.ALL -> true
                 AppFilter.RUNNING -> app.running
                 AppFilter.BACKGROUND -> app.running && app.packageName != foregroundPackage
-                AppFilter.SAFE_STOP -> app.running && app.safeToStop
+                AppFilter.SAFE_STOP -> app.running && safeToStop(app)
                 AppFilter.USER -> !app.isSystem
                 AppFilter.SYSTEM -> app.isSystem
                 AppFilter.FROZEN -> app.isFrozen
+                AppFilter.WHITELIST -> app.packageName in whiteList
+                AppFilter.BLACKLIST -> app.packageName in blackList
             }
             matchesQuery && matchesFilter
         }
@@ -101,10 +131,12 @@ data class UiState(
         AppFilter.RUNNING -> apps.count { it.running }
         AppFilter.BACKGROUND ->
             apps.count { it.running && it.packageName != foregroundPackage }
-        AppFilter.SAFE_STOP -> apps.count { it.running && it.safeToStop }
+        AppFilter.SAFE_STOP -> apps.count { it.running && safeToStop(it) }
         AppFilter.USER -> apps.count { !it.isSystem }
         AppFilter.SYSTEM -> apps.count { it.isSystem }
         AppFilter.FROZEN -> apps.count { it.isFrozen }
+        AppFilter.WHITELIST -> apps.count { it.packageName in whiteList }
+        AppFilter.BLACKLIST -> apps.count { it.packageName in blackList }
     }
 
     /** Memoria ocupată de procesele aplicațiilor, fără UID-uri partajate. */
@@ -119,11 +151,14 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
     private val shellController = ShellController(application)
     private val scanner = AppScanner(application)
     private val backupStore = ApkBackup(application)
+    private val lists = AppLists(application)
 
     private val _ui = MutableStateFlow(
         UiState(
             adbHost = shellController.adbHost,
             adbPort = shellController.adbPort.toString(),
+            whiteList = lists.white(),
+            blackList = lists.black(),
         ),
     )
     val ui: StateFlow<UiState> = _ui.asStateFlow()
@@ -285,9 +320,171 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun forceStop(app: AppEntry) {
+        if (app.packageName in _ui.value.whiteList) {
+            showMessage(
+                "${app.label} este în lista albă, deci nu a fost oprită. " +
+                    "Scoate-o din listă dacă vrei să o poți opri.",
+                isError = true,
+            )
+            return
+        }
         runAction("Oprește ${app.label}…") { shell ->
             AppActions(shell).forceStop(app.packageName)
         }
+    }
+
+    /**
+     * Oprește dintr-un singur gest toate aplicațiile selectate.
+     *
+     * Sunt sărite cele din **lista albă** și cele care nu rulează; restul sunt
+     * oprite pe rând, iar la final se raportează câte au reușit și câte nu.
+     */
+    fun stopSelected() {
+        val state = _ui.value
+        if (state.selection.isEmpty()) {
+            showMessage("Nu ai selectat nicio aplicație.")
+            return
+        }
+
+        val backend = shellController.backend
+        if (backend == null) {
+            showMessage("Ai nevoie de adb sau Shizuku pentru această acțiune.", isError = true)
+            return
+        }
+
+        val selected = state.apps.filter { it.packageName in state.selection }
+        val protectedOnes = selected.filter { it.packageName in state.whiteList }
+        val targets = selected.filter {
+            it.packageName !in state.whiteList && it.running
+        }
+        val alreadyStopped = selected.count {
+            it.packageName !in state.whiteList && !it.running
+        }
+
+        if (targets.isEmpty()) {
+            showMessage(
+                when {
+                    protectedOnes.isNotEmpty() ->
+                        "Toate aplicațiile selectate sunt în lista albă."
+                    alreadyStopped > 0 ->
+                        "Aplicațiile selectate nu rulează."
+                    else -> "Nu am ce opri."
+                },
+                isError = true,
+            )
+            return
+        }
+
+        viewModelScope.launch {
+            _ui.value = _ui.value.copy(busyLabel = "Opresc ${targets.size} aplicații…")
+            val actions = AppActions(backend)
+
+            var stopped = 0
+            var failed = 0
+            var stoppedKb = 0L
+
+            withContext(Dispatchers.IO) {
+                targets.forEach { app ->
+                    val result = actions.forceStop(app.packageName)
+                    if (result.ok) {
+                        stopped++
+                        if (!app.sharedUid) stoppedKb += app.rssKb
+                    } else {
+                        failed++
+                    }
+                }
+            }
+
+            _ui.value = _ui.value.copy(busyLabel = null, selection = emptySet())
+
+            val freedMemory = if (stoppedKb > 0) {
+                " Am eliberat ~${AppEntry.formatKb(stoppedKb)}."
+            } else {
+                ""
+            }
+            val skipped = when {
+                protectedOnes.isNotEmpty() -> " Sărite din lista albă: ${protectedOnes.size}."
+                else -> ""
+            }
+
+            if (failed == 0) {
+                showMessage("Am oprit $stopped aplicații.$freedMemory$skipped")
+            } else {
+                showMessage(
+                    "Am oprit $stopped aplicații, $failed au eșuat.$freedMemory$skipped",
+                    isError = true,
+                )
+            }
+
+            scan()
+        }
+    }
+
+    // ------------------------------------------------------------- selecție
+
+    /** Intră în modul de selecție cu pachetul dat (apăsare lungă pe rând). */
+    fun toggleSelection(packageName: String) {
+        val current = _ui.value.selection
+        _ui.value = _ui.value.copy(
+            selection = if (packageName in current) current - packageName else current + packageName,
+        )
+    }
+
+    /** Selectează tot ce se vede acum (după cautare și filtru). */
+    fun selectAllVisible() {
+        val visible = _ui.value.visible().map { it.packageName }.toSet()
+        _ui.value = _ui.value.copy(selection = visible)
+    }
+
+    fun clearSelection() {
+        _ui.value = _ui.value.copy(selection = emptySet())
+    }
+
+    // --------------------------------------------------------------- liste
+
+    /** Adaugă sau scoate din lista albă / neagră. */
+    fun toggleList(kind: AppLists.Kind, packageName: String) {
+        lists.toggle(kind, packageName)
+        applyLists()
+        val name = listName(kind)
+        val inside = packageName in lists.of(kind)
+        showMessage(
+            if (inside) "$packageName a fost adăugat în $name."
+            else "$packageName a fost scos din $name.",
+        )
+    }
+
+    /** Mută selecția curentă într-o listă și golește selecția. */
+    fun addSelectedToList(kind: AppLists.Kind) {
+        val selected = _ui.value.selection
+        if (selected.isEmpty()) {
+            showMessage("Nu ai selectat nicio aplicație.")
+            return
+        }
+        lists.add(kind, selected)
+        applyLists()
+        _ui.value = _ui.value.copy(selection = emptySet())
+        showMessage(
+            "Am adăugat ${selected.size} aplicații în ${listName(kind)}.",
+        )
+    }
+
+    fun clearList(kind: AppLists.Kind) {
+        lists.clear(kind)
+        applyLists()
+        showMessage("Am golit ${listName(kind)}.")
+    }
+
+    private fun applyLists() {
+        _ui.value = _ui.value.copy(
+            whiteList = lists.white(),
+            blackList = lists.black(),
+        )
+    }
+
+    private fun listName(kind: AppLists.Kind): String = when (kind) {
+        AppLists.Kind.WHITE -> "lista albă"
+        AppLists.Kind.BLACK -> "lista neagră"
     }
 
     fun backupOnly(app: AppEntry) {

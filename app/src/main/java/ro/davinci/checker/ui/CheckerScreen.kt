@@ -3,8 +3,10 @@ package ro.davinci.checker.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,6 +36,7 @@ import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.PlaylistAdd
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Close
@@ -91,6 +94,7 @@ import ro.davinci.checker.CheckerViewModel
 import ro.davinci.checker.SortMode
 import ro.davinci.checker.UiState
 import ro.davinci.checker.data.AppEntry
+import ro.davinci.checker.data.AppLists
 import ro.davinci.checker.data.IconCache
 import ro.davinci.checker.data.StopSafety
 
@@ -128,34 +132,58 @@ fun CheckerApp(vm: CheckerViewModel) {
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                ),
-                title = {
-                    Column {
-                        Text("Checker", fontWeight = FontWeight.SemiBold)
+            if (ui.selecting) {
+                TopAppBar(
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    ),
+                    navigationIcon = {
+                        IconButton(onClick = vm::clearSelection) {
+                            Icon(Icons.Default.Close, contentDescription = "Renunță la selecție")
+                        }
+                    },
+                    title = {
                         Text(
-                            text = connectionLine(ui),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                            "${ui.selection.size} selectate",
+                            fontWeight = FontWeight.SemiBold,
                         )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { vm.scan() }, enabled = !ui.loading) {
-                        Icon(Icons.Default.Refresh, contentDescription = "Rescanează")
-                    }
-                    IconButton(onClick = { vm.refreshBackups(); showBackups = true }) {
-                        Icon(Icons.Default.Folder, contentDescription = "Backup-uri APK")
-                    }
-                    IconButton(onClick = { showConnection = true }) {
-                        Icon(Icons.Default.Settings, contentDescription = "Conexiune")
-                    }
-                },
-            )
+                    },
+                    actions = {
+                        IconButton(onClick = vm::selectAllVisible) {
+                            Icon(Icons.Default.PlaylistAdd, contentDescription = "Selectează tot")
+                        }
+                    },
+                )
+            } else {
+                TopAppBar(
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background,
+                    ),
+                    title = {
+                        Column {
+                            Text("Checker", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                text = connectionLine(ui),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    },
+                    actions = {
+                        IconButton(onClick = { vm.scan() }, enabled = !ui.loading) {
+                            Icon(Icons.Default.Refresh, contentDescription = "Rescanează")
+                        }
+                        IconButton(onClick = { vm.refreshBackups(); showBackups = true }) {
+                            Icon(Icons.Default.Folder, contentDescription = "Backup-uri APK")
+                        }
+                        IconButton(onClick = { showConnection = true }) {
+                            Icon(Icons.Default.Settings, contentDescription = "Conexiune")
+                        }
+                    },
+                )
+            }
         },
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
@@ -215,6 +243,15 @@ fun CheckerApp(vm: CheckerViewModel) {
 
             SortRow(ui = ui, onSort = vm::setSort)
 
+            if (ui.selecting) {
+                SelectionBar(
+                    ui = ui,
+                    onStop = vm::stopSelected,
+                    onWhite = { vm.addSelectedToList(AppLists.Kind.WHITE) },
+                    onBlack = { vm.addSelectedToList(AppLists.Kind.BLACK) },
+                )
+            }
+
             if (ui.filter == AppFilter.SAFE_STOP) {
                 Text(
                     text = "Aplicații de utilizator care rulează acum, fără serviciu în prim-plan " +
@@ -225,18 +262,44 @@ fun CheckerApp(vm: CheckerViewModel) {
                 )
             }
 
+            if (!ui.selecting &&
+                (ui.filter == AppFilter.BACKGROUND ||
+                    ui.filter == AppFilter.RUNNING ||
+                    ui.filter == AppFilter.BLACKLIST)
+            ) {
+                Text(
+                    text = "Apasă lung pe un rând ca să selectezi mai multe, apoi oprește-le " +
+                        "pe toate dintr-un singur tap.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                )
+            }
+
             Spacer(Modifier.height(6.dp))
 
-            val visible = remember(ui.apps, ui.query, ui.filter, ui.sortMode, ui.foregroundPackage) {
+            val visible = remember(
+                ui.apps,
+                ui.query,
+                ui.filter,
+                ui.sortMode,
+                ui.foregroundPackage,
+                ui.whiteList,
+                ui.blackList,
+            ) {
                 ui.visible()
             }
             if (visible.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
-                        text = if (ui.apps.isEmpty()) {
-                            "Nicio aplicație încărcată.\nApasă pe reîmprospătare."
-                        } else {
-                            "Nicio aplicație pentru filtrul curent."
+                        text = when {
+                            ui.apps.isEmpty() ->
+                                "Nicio aplicație încărcată.\nApasă pe reîmprospătare."
+                            ui.filter == AppFilter.WHITELIST ->
+                                "Lista albă e goală.\nApasă lung pe o aplicație ca să o adaugi."
+                            ui.filter == AppFilter.BLACKLIST ->
+                                "Lista neagră e goală.\nApasă lung pe o aplicație ca să o adaugi."
+                            else -> "Nicio aplicație pentru filtrul curent."
                         },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -257,8 +320,21 @@ fun CheckerApp(vm: CheckerViewModel) {
                             isForeground = app.packageName == ui.foregroundPackage,
                             showSafety = ui.filter == AppFilter.RUNNING ||
                                 ui.filter == AppFilter.BACKGROUND ||
-                                ui.filter == AppFilter.SAFE_STOP,
-                            onClick = { selectedPackage = app.packageName },
+                                ui.filter == AppFilter.SAFE_STOP ||
+                                ui.filter == AppFilter.WHITELIST ||
+                                ui.filter == AppFilter.BLACKLIST,
+                            safety = ui.safetyOf(app),
+                            selecting = ui.selecting,
+                            selected = app.packageName in ui.selection,
+                            inWhiteList = app.packageName in ui.whiteList,
+                            inBlackList = app.packageName in ui.blackList,
+                            onLongClick = {
+                                if (!ui.selecting) vm.toggleSelection(app.packageName)
+                            },
+                            onClick = {
+                                if (ui.selecting) vm.toggleSelection(app.packageName)
+                                else selectedPackage = app.packageName
+                            },
                         )
                     }
                 }
@@ -272,12 +348,22 @@ fun CheckerApp(vm: CheckerViewModel) {
             app = selected,
             isForeground = selected.packageName == ui.foregroundPackage,
             connected = ui.connected,
+            safety = ui.safetyOf(selected),
+            safetyReason = ui.safetyReasonOf(selected),
+            inWhiteList = selected.packageName in ui.whiteList,
+            inBlackList = selected.packageName in ui.blackList,
             onDismiss = { selectedPackage = null },
             onFreeze = { vm.freeze(selected) },
             onUnfreeze = { vm.unfreeze(selected) },
             onForceStop = { vm.forceStop(selected) },
             onBackup = { vm.backupOnly(selected) },
             onUninstall = { pendingUninstall = selected.packageName },
+            onToggleWhite = {
+                vm.toggleList(AppLists.Kind.WHITE, selected.packageName)
+            },
+            onToggleBlack = {
+                vm.toggleList(AppLists.Kind.BLACK, selected.packageName)
+            },
             onOpen = {
                 vm.launchIntent(selected.packageName)?.let { intent ->
                     runCatching { context.startActivity(intent) }
@@ -464,6 +550,66 @@ private fun ConnectionDialog(
 }
 
 @Composable
+private fun SelectionBar(
+    ui: UiState,
+    onStop: () -> Unit,
+    onWhite: () -> Unit,
+    onBlack: () -> Unit,
+) {
+    val selectedApps = ui.apps.filter { it.packageName in ui.selection }
+    val runningCount = selectedApps.count { it.running }
+    val protectedCount = selectedApps.count { it.packageName in ui.whiteList }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+        ),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Text(
+                text = buildString {
+                    append("${selectedApps.size} selectate")
+                    if (runningCount > 0) append(" · $runningCount rulează")
+                    if (protectedCount > 0) append(" · $protectedCount în lista albă")
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSecondaryContainer,
+            )
+
+            Spacer(Modifier.height(6.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Button(
+                    onClick = onStop,
+                    enabled = runningCount > 0,
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                ) {
+                    Icon(Icons.Default.Stop, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Oprește (${runningCount - protectedCount})")
+                }
+                OutlinedButton(
+                    onClick = onWhite,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                ) {
+                    Text("Albă", style = MaterialTheme.typography.labelMedium)
+                }
+                OutlinedButton(
+                    onClick = onBlack,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
+                ) {
+                    Text("Neagră", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun SortRow(ui: UiState, onSort: (SortMode) -> Unit) {
     val runningView = ui.filter == AppFilter.RUNNING ||
         ui.filter == AppFilter.BACKGROUND ||
@@ -517,11 +663,18 @@ private fun safetyColor(safety: StopSafety): Color = when (safety) {
     StopSafety.NEVER -> CheckerRed
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AppRow(
     app: AppEntry,
     isForeground: Boolean,
     showSafety: Boolean,
+    safety: StopSafety,
+    selecting: Boolean,
+    selected: Boolean,
+    inWhiteList: Boolean,
+    inBlackList: Boolean,
+    onLongClick: () -> Unit,
     onClick: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -532,11 +685,19 @@ private fun AppRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .background(
+                if (selected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
+                else Color.Transparent,
+            )
             .padding(horizontal = 16.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        if (selecting) {
+            Checkbox(checked = selected, onCheckedChange = { onClick() })
+        }
+
         AppIcon(icon, app.label)
 
         Column(modifier = Modifier.weight(1f)) {
@@ -565,10 +726,12 @@ private fun AppRow(
                     color = if (app.isSystem) CheckerViolet else CheckerBlue,
                 )
                 if (app.isFrozen) Badge("îngheţat", CheckerRed)
+                if (inWhiteList) Badge("protejat", CheckerBlue)
+                if (inBlackList) Badge("țintă", CheckerRed)
                 if (isForeground) Badge("prim-plan", CheckerAmber)
                 else if (app.running) Badge("fundal", CheckerGreen)
-                if (showSafety && app.running) {
-                    Badge(app.safety.short, safetyColor(app.safety))
+                if (showSafety && app.running && !inWhiteList) {
+                    Badge(app.safety.short, safetyColor(safety))
                 }
             }
         }
@@ -598,12 +761,18 @@ private fun AppDetailSheet(
     app: AppEntry,
     isForeground: Boolean,
     connected: Boolean,
+    safety: StopSafety,
+    safetyReason: String,
+    inWhiteList: Boolean,
+    inBlackList: Boolean,
     onDismiss: () -> Unit,
     onFreeze: () -> Unit,
     onUnfreeze: () -> Unit,
     onForceStop: () -> Unit,
     onBackup: () -> Unit,
     onUninstall: () -> Unit,
+    onToggleWhite: () -> Unit,
+    onToggleBlack: () -> Unit,
     onOpen: () -> Unit,
     onCopyPackage: () -> Unit,
 ) {
@@ -649,6 +818,14 @@ private fun AppDetailSheet(
                 }
             }
 
+            if (inWhiteList || inBlackList) {
+                Spacer(Modifier.height(6.dp))
+                Badge(
+                    text = if (inWhiteList) "în lista albă" else "în lista neagră",
+                    color = if (inWhiteList) CheckerBlue else CheckerRed,
+                )
+            }
+
             Spacer(Modifier.height(12.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             Spacer(Modifier.height(10.dp))
@@ -681,7 +858,25 @@ private fun AppDetailSheet(
 
             Spacer(Modifier.height(12.dp))
 
-            SafetyCard(app)
+            SafetyCard(safety = safety, reason = safetyReason)
+
+            Spacer(Modifier.height(14.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ListToggle(
+                    label = if (inWhiteList) "Scoate din lista albă" else "Adaugă în lista albă",
+                    color = CheckerBlue,
+                    onClick = onToggleWhite,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ListToggle(
+                    label = if (inBlackList) "Scoate din lista neagră" else "Adaugă în lista neagră",
+                    color = CheckerRed,
+                    onClick = onToggleBlack,
+                )
+            }
 
             Spacer(Modifier.height(14.dp))
 
@@ -703,13 +898,14 @@ private fun AppDetailSheet(
 
             if (app.running) {
                 ActionButton(
-                    text = when (app.safety) {
-                        StopSafety.SAFE -> "Oprește procesele"
-                        StopSafety.CAUTION -> "Oprește temporar procesele"
-                        StopSafety.NEVER -> "Oprește forțat (nerecomandat)"
+                    text = when {
+                        inWhiteList -> "Protejată de lista albă"
+                        safety == StopSafety.SAFE -> "Oprește procesele"
+                        safety == StopSafety.CAUTION -> "Oprește temporar procesele"
+                        else -> "Oprește forțat (nerecomandat)"
                     },
                     icon = Icons.Default.Stop,
-                    enabled = connected,
+                    enabled = connected && !inWhiteList,
                     onClick = onForceStop,
                 )
             }
@@ -755,8 +951,8 @@ private fun AppDetailSheet(
 }
 
 @Composable
-private fun SafetyCard(app: AppEntry) {
-    val color = safetyColor(app.safety)
+private fun SafetyCard(safety: StopSafety, reason: String) {
+    val color = safetyColor(safety)
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(14.dp),
@@ -765,12 +961,10 @@ private fun SafetyCard(app: AppEntry) {
         Column(modifier = Modifier.padding(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    imageVector = if (app.safety == StopSafety.NEVER) {
-                        Icons.Default.Block
-                    } else if (app.safety == StopSafety.CAUTION) {
-                        Icons.Default.Warning
-                    } else {
-                        Icons.Default.CheckCircle
+                    imageVector = when (safety) {
+                        StopSafety.NEVER -> Icons.Default.Block
+                        StopSafety.CAUTION -> Icons.Default.Warning
+                        StopSafety.SAFE -> Icons.Default.CheckCircle
                     },
                     contentDescription = null,
                     modifier = Modifier.size(18.dp),
@@ -778,18 +972,29 @@ private fun SafetyCard(app: AppEntry) {
                 )
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = app.safety.label,
+                    text = safety.label,
                     style = MaterialTheme.typography.titleSmall,
                     color = color,
                 )
             }
             Spacer(Modifier.height(6.dp))
             Text(
-                text = app.safetyReason,
+                text = reason,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface,
             )
         }
+    }
+}
+
+@Composable
+private fun ListToggle(label: String, color: Color, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        colors = ButtonDefaults.outlinedButtonColors(contentColor = color),
+    ) {
+        Text(label, style = MaterialTheme.typography.labelLarge)
     }
 }
 
