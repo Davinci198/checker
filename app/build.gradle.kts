@@ -3,6 +3,22 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+/**
+ * versionCode = numărul de commituri din istorie.
+ *
+ * Crește singur la fiecare commit, deci un APK nou se instalează peste cel vechi
+ * (`adb install -r`) fără `INSTALL_FAILED_VERSION_DOWNGRADE`, fără să ținem un
+ * contor de mână. CI are nevoie de `fetch-depth: 0`, altfel vede un singur commit.
+ */
+val gitCommitCount: Provider<Int> = providers.exec {
+    commandLine("git", "rev-list", "--count", "HEAD")
+    workingDir = rootProject.projectDir
+}.standardOutput.asText.map { it.trim().toIntOrNull() ?: 1 }
+
+/** Keystore-ul de release: local `release.jks` (gitignored) sau decodat în CI. */
+val releaseKeystore = rootProject.file("release.jks")
+val hasReleaseKeystore = releaseKeystore.exists()
+
 android {
     namespace = "ro.davinci.checker"
     compileSdk = 36
@@ -11,8 +27,19 @@ android {
         applicationId = "ro.davinci.checker"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = gitCommitCount.get()
+        versionName = "1.0.${gitCommitCount.get()}"
+    }
+
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            create("release") {
+                storeFile = releaseKeystore
+                storePassword = System.getenv("RELEASE_STORE_PASSWORD").orEmpty()
+                keyAlias = System.getenv("RELEASE_KEY_ALIAS") ?: "checker"
+                keyPassword = System.getenv("RELEASE_KEY_PASSWORD").orEmpty()
+            }
+        }
     }
 
     buildTypes {
@@ -26,6 +53,10 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            // Fără keystore, build-ul rămâne nesemnat (util doar pentru inspecție).
+            if (hasReleaseKeystore) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

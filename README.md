@@ -128,6 +128,39 @@ export ANDROID_HOME=/data/data/com.termux/files/home/Android
 
 APK: `app/build/outputs/apk/debug/app-debug.apk` (`ro.davinci.checker.debug`).
 
+**Debug e lent la derulare.** Un build `debug` (`debuggable=true`, fără AOT)
+măsoară ~43% cadre pierdute și p90 = 133 ms la scroll; același cod în `release`
+dă ~2,8% și p90 = 11 ms. Pentru senzația reală se folosește release-ul.
+
+## Release semnat
+
+Release-ul folosește `ro.davinci.checker` (fără sufix) și un keystore propriu,
+ca update-urile să se instaleze **peste** versiunea existentă, fără dezinstalare:
+
+```bash
+cp ~/9remote-uploads/opencode/checker-keys/checker-release.jks release.jks   # gitignored
+export RELEASE_STORE_PASSWORD=$(grep storePassword ~/9remote-uploads/opencode/checker-keys/passwords.txt | cut -d= -f2)
+export RELEASE_KEY_PASSWORD=$RELEASE_STORE_PASSWORD
+export RELEASE_KEY_ALIAS=checker
+./gradlew :app:assembleRelease -Pandroid.aapt2FromMavenOverride=$(which aapt2)
+adb install -r app/build/outputs/apk/release/app-release.apk
+```
+
+Fără `release.jks` build-ul rămâne nesemnat (`app-release-unsigned.apk`), util
+doar pentru inspecție — nu se poate instala.
+
+**Versionarea e automată:** `versionCode` = numărul de commituri din istorie,
+`versionName` = `1.0.<versionCode>`. Fiecare commit nou produce un cod mai mare,
+deci `adb install -r` nu dă `INSTALL_FAILED_VERSION_DOWNGRADE`. CI are nevoie de
+`fetch-depth: 0` ca să vadă tot istoricul.
+
+**Release prin CI:** `gh workflow run "Build APK" --ref main` — jobul
+*Release APK semnat* decodifică keystore-ul din `RELEASE_KEYSTORE_BASE64`,
+semnează, verifică semnătura cu `apksigner`, urcă artefactul și publică un
+GitHub Release `v<versionName>` cu APK-ul atașat. Secrete necesare:
+`RELEASE_KEYSTORE_BASE64`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_PASSWORD`,
+`RELEASE_KEY_ALIAS`.
+
 ## Limite cunoscute
 
 - Fără adb și fără Shizuku, lista de aplicații se vede, dar starea „rulează” și
