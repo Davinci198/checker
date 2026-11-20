@@ -9,14 +9,57 @@ instalate pe telefon. Interfața este integral în română.
   **utilizator**.
 - Arată **ce rulează**: procesele aparținând fiecărui pachet (prin UID), memoria
   ocupată (RSS) și dacă aplicația este în **prim-plan** sau în **fundal**.
+- **Sortează după memorie** — în tab-urile Rulează / Fundal / Oprire sigură
+  lista e ordonată descrescător după RSS, cu totalul de memorie afișat sus.
+- Spune **ce se poate opri în siguranță**: fiecare aplicație primește un verdict
+  (oprire sigură / atenție / nu opri) și motivul lui, iar filtrul
+  **Oprire sigură** arată doar aplicațiile care pot fi oprite fără efecte.
 - **Îngheață** (`pm disable-user --user 0`) și **dezgheață** (`pm enable`)
   aplicații.
+- **Oprește mai multe deodată**: apăsare lungă pe un rând intră în modul de
+  selecție, apeși pe câte aplicații vrei, apoi **Oprește (N)** le oprește pe
+  toate dintr-un singur tap. Se raportează câte au reușit și câtă memorie s-a
+  eliberat.
+- **Lista albă și lista neagră**, ambele persistente:
+  - **lista albă** = aplicații protejate; nu se opresc nici individual, nici în
+    masă, iar verdictul lor devine „Nu opri”;
+  - **lista neagră** = aplicațiile pe care le oprești mereu; au filtru propriu,
+    ca să le oprești împreună dintr-un tap.
+  Un pachet stă într-o singură listă — adăugarea într-una îl scoate din cealaltă.
+  Se adaugă din fișa aplicației sau pe lot, din modul de selecție.
 - **Dezinstalează** — și, implicit, face întâi o **copie a APK-urilor** în
   `Download/Checker/apk-backup/<pachet>/<data>/`.
 - **Reinstalează** din copie, inclusiv pachetele cu split-uri
   (`pm install-create` → `install-write` → `install-commit`).
-- Filtre: Toate / Rulează / Fundal / Utilizator / Sistem / Înghețate, plus
-  căutare după nume sau pachet.
+- Filtre: Toate / Rulează / Fundal / Oprire sigură / Utilizator / Sistem /
+  Înghețate / Listă albă / Listă neagră, plus căutare după nume sau pachet.
+
+## Siguranța la oprire
+
+Verdictul nu e o presupunere: se calculează din rolurile pe care sistemul le dă
+pachetului și din starea lui reală.
+
+| Verdict | Când | Exemple |
+|---|---|---|
+| **Nu opri** | UID de sistem (< 10000), proces persistent, lansatorul, tastatura implicită, aplicația de apeluri sau de SMS, serviciu de accesibilitate activ, administrator de dispozitiv | SystemUI, Messages, launcher-ul |
+| **Oprește doar temporar** | are serviciu în prim-plan sau e aplicație de sistem | muzică, descărcări, navigație, GMS |
+| **Poți opri în siguranță** | aplicație de utilizator, fără serviciu în prim-plan, fără rol critic | aplicații obișnuite din fundal |
+
+Rolurile critice se citesc din `Settings.Secure` (`default_input_method`,
+`enabled_accessibility_services`), din `TelecomManager`, `Telephony.Sms`,
+`DevicePolicyManager` și din rezolvarea intenției `CATEGORY_HOME`; serviciile în
+prim-plan vin dintr-o singură citire `dumpsys activity services`, filtrată pe
+`isForeground=true`.
+
+Fiecare fișă de aplicație arată și informații despre pachet: versiune, UID,
+procese, memorie, SDK țintă/minim, data instalării și a ultimei actualizări,
+sursa instalării (`com.android.vending`, `com.google.android.packageinstaller`
+etc.), numărul de permisiuni cerute și câte sunt periculoase, dacă are iconiță
+în sertar și dacă are serviciu în prim-plan.
+
+**Memoria partajată:** pachetele care împart un UID (de exemplu uid 1000, adică
+`system_server`) raportează aceleași procese. Aplicația le arată ca „partajat” și
+nu le mai adună la total, ca să nu apară sume umflate.
 
 ## Cum obține privilegii
 
@@ -59,7 +102,8 @@ app/src/main/java/ro/davinci/checker/
 │   ├── LocalShell.kt                    # fallback fără privilegii
 │   └── ShellController.kt               # alege backend-ul, ține starea
 ├── data/
-│   ├── AppEntry.kt / AppScanner.kt      # pachete, procese, prim-plan
+│   ├── AppEntry.kt / AppScanner.kt      # pachete, procese, prim-plan, informații
+│   ├── AppSafety.kt                     # verdict de oprire + rolurile critice
 │   ├── AppActions.kt                    # îngheață / dezgheață / force-stop
 │   ├── ApkBackup.kt                     # copie APK + reinstalare
 │   └── IconCache.kt                     # icoane LRU pentru listă
@@ -94,6 +138,47 @@ export ANDROID_HOME=/data/data/com.termux/files/home/Android
 ```
 
 APK: `app/build/outputs/apk/debug/app-debug.apk` (`ro.davinci.checker.debug`).
+
+**Debug e lent la derulare.** Un build `debug` (`debuggable=true`, fără AOT)
+măsoară ~43% cadre pierdute și p90 = 133 ms la scroll; același cod în `release`
+dă ~2,8% și p90 = 11 ms. Pentru senzația reală se folosește release-ul.
+
+## Release semnat
+
+**Build-ul de release se face pe GitHub Actions, nu pe telefon** — R8 + release
+țin CPU-ul la 100% minute întregi și telefonul se încălzește. Local rămâne doar
+pentru verificare rapidă a unui `assembleDebug`.
+
+Release-ul folosește `ro.davinci.checker` (fără sufix) și un keystore propriu,
+ca update-urile să se instaleze **peste** versiunea existentă, fără dezinstalare:
+
+```bash
+cp ~/9remote-uploads/opencode/checker-keys/checker-release.jks release.jks   # gitignored
+PW=$(grep storePassword ~/9remote-uploads/opencode/checker-keys/passwords.txt | cut -d= -f2)
+./gradlew :app:assembleRelease -Pandroid.aapt2FromMavenOverride=$(which aapt2) \
+  -Pchecker.storePassword="$PW" -Pchecker.keyPassword="$PW" -Pchecker.keyAlias=checker
+adb install -r app/build/outputs/apk/release/app-release.apk
+```
+
+Parolele se dau ca proprietăți (`-Pchecker.*`) sau, în CI, ca variabile de mediu
+(`RELEASE_STORE_PASSWORD`, `RELEASE_KEY_PASSWORD`, `RELEASE_KEY_ALIAS`) — nu
+doar din mediu local, fiindcă un `GradleDaemon` deja pornit nu primește
+variabilele noi și semnarea cade cu „keystore password was incorrect”.
+
+Fără `release.jks` build-ul rămâne nesemnat (`app-release-unsigned.apk`), util
+doar pentru inspecție — nu se poate instala.
+
+**Versionarea e automată:** `versionCode` = numărul de commituri din istorie,
+`versionName` = `1.0.<versionCode>`. Fiecare commit nou produce un cod mai mare,
+deci `adb install -r` nu dă `INSTALL_FAILED_VERSION_DOWNGRADE`. CI are nevoie de
+`fetch-depth: 0` ca să vadă tot istoricul.
+
+**Release prin CI:** `gh workflow run "Build APK" --ref main` — jobul
+*Release APK semnat* decodifică keystore-ul din `RELEASE_KEYSTORE_BASE64`,
+semnează, verifică semnătura cu `apksigner`, urcă artefactul și publică un
+GitHub Release `v<versionName>` cu APK-ul atașat. Secrete necesare:
+`RELEASE_KEYSTORE_BASE64`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_PASSWORD`,
+`RELEASE_KEY_ALIAS`.
 
 ## Limite cunoscute
 

@@ -1,21 +1,28 @@
 package ro.davinci.checker
 
 import android.app.Application
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
 import ro.davinci.checker.data.ApkBackup
 import ro.davinci.checker.data.AppActions
 import ro.davinci.checker.data.AppEntry
+import ro.davinci.checker.data.AppLists
 import ro.davinci.checker.data.AppScanner
+import ro.davinci.checker.data.StopSafety
+import ro.davinci.checker.data.SystemStats
 import ro.davinci.checker.shell.ShellController
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -25,9 +32,21 @@ enum class AppFilter(val label: String) {
     ALL("Toate"),
     RUNNING("Rulează"),
     BACKGROUND("Fundal"),
+    HOT("Consum CPU"),
+    SAFE_STOP("Oprire sigură"),
     USER("Utilizator"),
     SYSTEM("Sistem"),
     FROZEN("Înghețate"),
+    WHITELIST("Listă albă"),
+    BLACKLIST("Listă neagră"),
+}
+
+/** Ordinea listei. `AUTO` alege memoria pentru tab-urile de procese. */
+enum class SortMode(val label: String) {
+    AUTO("Automat"),
+    RAM("Memorie"),
+    CPU("CPU"),
+    NAME("Nume"),
 }
 
 data class UiState(
@@ -38,6 +57,14 @@ data class UiState(
     val backups: List<ApkBackup.Entry> = emptyList(),
     val query: String = "",
     val filter: AppFilter = AppFilter.ALL,
+    val sortMode: SortMode = SortMode.AUTO,
+    val whiteList: Set<String> = emptySet(),
+    val blackList: Set<String> = emptySet(),
+    val selection: Set<String> = emptySet(),
+    val stats: SystemStats = SystemStats.EMPTY,
+    val cpuHistory: List<Float> = emptyList(),
+    val ramHistory: List<Float> = emptyList(),
+    val liveEnabled: Boolean = true,
     val loading: Boolean = false,
     val busyLabel: String? = null,
     val message: String? = null,
@@ -48,9 +75,40 @@ data class UiState(
 ) {
     val connected: Boolean get() = connection is ShellController.State.Connected
 
+    /** Selecția e activă cât timp există cel puțin un pachet ales. */
+    val selecting: Boolean get() = selection.isNotEmpty()
+
+    /**
+     * Verdictul care se afișează: lista albă are întâietate față de orice
+     * calcul, fiindcă e o decizie explicită a utilizatorului.
+     */
+    fun safetyOf(app: AppEntry): StopSafety =
+        if (app.packageName in whiteList) StopSafety.NEVER else app.safety
+
+    fun safetyReasonOf(app: AppEntry): String =
+        if (app.packageName in whiteList) {
+            "Este în lista albă: aplicația nu se oprește nici individual, nici în masă."
+        } else {
+            app.safetyReason
+        }
+
+    /** Poate fi oprită fără să afecteze telefonul (ține cont și de lista albă). */
+    fun safeToStop(app: AppEntry): Boolean =
+        safetyOf(app) == StopSafety.SAFE
+
+    /** Ce ordine se aplică efectiv pentru filtrul curent. */
+    fun effectiveSort(): SortMode = when (sortMode) {
+        SortMode.AUTO -> when (filter) {
+            AppFilter.HOT -> SortMode.CPU
+            AppFilter.RUNNING, AppFilter.BACKGROUND, AppFilter.SAFE_STOP -> SortMode.RAM
+            else -> SortMode.NAME
+        }
+        else -> sortMode
+    }
+
     fun visible(): List<AppEntry> {
         val term = query.trim().lowercase()
-        return apps.filter { app ->
+        val filtered = apps.filter { app ->
             val matchesQuery = term.isEmpty() ||
                 app.label.lowercase().contains(term) ||
                 app.packageName.lowercase().contains(term)
@@ -59,11 +117,29 @@ data class UiState(
                 AppFilter.ALL -> true
                 AppFilter.RUNNING -> app.running
                 AppFilter.BACKGROUND -> app.running && app.packageName != foregroundPackage
+                AppFilter.HOT -> app.running && app.cpuPercent >= HOT_THRESHOLD
+                AppFilter.SAFE_STOP -> app.running && safeToStop(app)
                 AppFilter.USER -> !app.isSystem
                 AppFilter.SYSTEM -> app.isSystem
                 AppFilter.FROZEN -> app.isFrozen
+                AppFilter.WHITELIST -> app.packageName in whiteList
+                AppFilter.BLACKLIST -> app.packageName in blackList
             }
             matchesQuery && matchesFilter
+        }
+
+        return when (effectiveSort()) {
+            SortMode.RAM -> filtered.sortedWith(
+                compareByDescending<AppEntry> { it.ownRssKb }
+                    .thenBy { it.label.lowercase() },
+            )
+            SortMode.CPU -> filtered.sortedWith(
+                compareByDescending<AppEntry> { it.cpuPercent }
+                    .thenBy { it.label.lowercase() },
+            )
+            else -> filtered.sortedWith(
+                compareBy<AppEntry> { it.isFrozen }.thenBy { it.label.lowercase() },
+            )
         }
     }
 
@@ -72,9 +148,24 @@ data class UiState(
         AppFilter.RUNNING -> apps.count { it.running }
         AppFilter.BACKGROUND ->
             apps.count { it.running && it.packageName != foregroundPackage }
+        AppFilter.HOT -> apps.count { it.running && it.cpuPercent >= HOT_THRESHOLD }
+        AppFilter.SAFE_STOP -> apps.count { it.running && safeToStop(it) }
         AppFilter.USER -> apps.count { !it.isSystem }
         AppFilter.SYSTEM -> apps.count { it.isSystem }
         AppFilter.FROZEN -> apps.count { it.isFrozen }
+        AppFilter.WHITELIST -> apps.count { it.packageName in whiteList }
+        AppFilter.BLACKLIST -> apps.count { it.packageName in blackList }
+    }
+
+    /** Memoria ocupată de procesele aplicațiilor, fără UID-uri partajate. */
+    val runningMemoryKb: Long
+        get() = apps.asSequence()
+            .filter { it.running && !it.sharedUid }
+            .sumOf { it.rssKb }
+
+    companion object {
+        /** De la acest procent o aplicație e considerată consumator de CPU. */
+        const val HOT_THRESHOLD = 1f
     }
 }
 
@@ -83,11 +174,20 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
     private val shellController = ShellController(application)
     private val scanner = AppScanner(application)
     private val backupStore = ApkBackup(application)
+    private val lists = AppLists(application)
+    private val prefs = application.getSharedPreferences("checker_prefs", Context.MODE_PRIVATE)
+
+    private var liveJob: Job? = null
+    private var screenVisible = false
+    private var tickCount = 0
 
     private val _ui = MutableStateFlow(
         UiState(
             adbHost = shellController.adbHost,
             adbPort = shellController.adbPort.toString(),
+            whiteList = lists.white(),
+            blackList = lists.black(),
+            liveEnabled = prefs.getBoolean(KEY_LIVE, true),
         ),
     )
     val ui: StateFlow<UiState> = _ui.asStateFlow()
@@ -117,6 +217,7 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     override fun onCleared() {
+        liveJob?.cancel()
         runCatching {
             Shizuku.removeRequestPermissionResultListener(permissionListener)
             Shizuku.removeBinderReceivedListener(binderListener)
@@ -213,6 +314,7 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
             connection = shellController.state,
             connectionError = shellController.lastError,
         )
+        syncLive()
     }
 
     // --------------------------------------------------------------- scanare
@@ -225,13 +327,101 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
             val backend = shellController.backend
             val result = withContext(Dispatchers.IO) { scanner.scan(backend) }
 
-            _ui.value = _ui.value.copy(
+            val previous = _ui.value
+            val hasStats = result.stats.ramTotalKb > 0
+            _ui.value = previous.copy(
                 apps = result.apps,
                 foregroundPackage = result.foregroundPackage,
                 warning = result.warning,
                 loading = false,
+                stats = result.stats.takeIf { hasStats } ?: previous.stats,
+                cpuHistory = if (hasStats) {
+                    (previous.cpuHistory + result.stats.cpuPercent).takeLast(HISTORY_SIZE)
+                } else {
+                    previous.cpuHistory
+                },
+                ramHistory = if (hasStats) {
+                    (previous.ramHistory + result.stats.ramPercent).takeLast(HISTORY_SIZE)
+                } else {
+                    previous.ramHistory
+                },
             )
+            syncLive()
         }
+    }
+
+    // ------------------------------------------------------------ live stats
+
+    /** Ecranul e vizibil: pornește eșantionarea dacă utilizatorul nu a oprit-o. */
+    fun onScreenVisible() {
+        screenVisible = true
+        syncLive()
+    }
+
+    fun onScreenHidden() {
+        screenVisible = false
+        syncLive()
+    }
+
+    /** Pornește sau oprește graficele live (alegerea se ține minte). */
+    fun setLiveEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_LIVE, enabled).apply()
+        _ui.value = _ui.value.copy(liveEnabled = enabled)
+        syncLive()
+    }
+
+    private fun syncLive() {
+        val state = _ui.value
+        val shouldRun = screenVisible && state.liveEnabled && state.connected
+        if (!shouldRun) {
+            liveJob?.cancel()
+            liveJob = null
+            return
+        }
+        if (liveJob?.isActive == true) return
+
+        liveJob = viewModelScope.launch {
+            while (isActive) {
+                tick()
+                delay(TICK_MS)
+            }
+        }
+    }
+
+    /**
+     * Un tick: o singură comandă shell pentru CPU/RAM/procese, apoi se
+     * actualizează doar câmpurile care se schimbă. Lista de pachete nu se
+     * rescană — altfel ar însemna 551 de intrări la fiecare 2 secunde.
+     */
+    private suspend fun tick() {
+        val backend = shellController.backend ?: return
+        val sample = withContext(Dispatchers.IO) { scanner.sample(backend) }
+        if (sample.error != null) return
+
+        tickCount++
+        val foreground = if (tickCount % FOREGROUND_EVERY == 0) {
+            withContext(Dispatchers.IO) { scanner.foreground(backend) }
+        } else {
+            null
+        }
+
+        val state = _ui.value
+        val apps = state.apps.map { app ->
+            val proc = sample.processes[app.uid]
+            if (proc == null) {
+                app.copy(pids = emptyList(), rssKb = 0, cpuPercent = 0f)
+            } else {
+                app.copy(pids = proc.pids, rssKb = proc.rssKb, cpuPercent = proc.cpuPercent)
+            }
+        }
+
+        _ui.value = state.copy(
+            apps = apps,
+            stats = sample.stats,
+            cpuHistory = (state.cpuHistory + sample.stats.cpuPercent).takeLast(HISTORY_SIZE),
+            ramHistory = (state.ramHistory + sample.stats.ramPercent).takeLast(HISTORY_SIZE),
+            foregroundPackage = foreground ?: state.foregroundPackage,
+        )
     }
 
     // -------------------------------------------------------------- acțiuni
@@ -249,9 +439,171 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun forceStop(app: AppEntry) {
+        if (app.packageName in _ui.value.whiteList) {
+            showMessage(
+                "${app.label} este în lista albă, deci nu a fost oprită. " +
+                    "Scoate-o din listă dacă vrei să o poți opri.",
+                isError = true,
+            )
+            return
+        }
         runAction("Oprește ${app.label}…") { shell ->
             AppActions(shell).forceStop(app.packageName)
         }
+    }
+
+    /**
+     * Oprește dintr-un singur gest toate aplicațiile selectate.
+     *
+     * Sunt sărite cele din **lista albă** și cele care nu rulează; restul sunt
+     * oprite pe rând, iar la final se raportează câte au reușit și câte nu.
+     */
+    fun stopSelected() {
+        val state = _ui.value
+        if (state.selection.isEmpty()) {
+            showMessage("Nu ai selectat nicio aplicație.")
+            return
+        }
+
+        val backend = shellController.backend
+        if (backend == null) {
+            showMessage("Ai nevoie de adb sau Shizuku pentru această acțiune.", isError = true)
+            return
+        }
+
+        val selected = state.apps.filter { it.packageName in state.selection }
+        val protectedOnes = selected.filter { it.packageName in state.whiteList }
+        val targets = selected.filter {
+            it.packageName !in state.whiteList && it.running
+        }
+        val alreadyStopped = selected.count {
+            it.packageName !in state.whiteList && !it.running
+        }
+
+        if (targets.isEmpty()) {
+            showMessage(
+                when {
+                    protectedOnes.isNotEmpty() ->
+                        "Toate aplicațiile selectate sunt în lista albă."
+                    alreadyStopped > 0 ->
+                        "Aplicațiile selectate nu rulează."
+                    else -> "Nu am ce opri."
+                },
+                isError = true,
+            )
+            return
+        }
+
+        viewModelScope.launch {
+            _ui.value = _ui.value.copy(busyLabel = "Opresc ${targets.size} aplicații…")
+            val actions = AppActions(backend)
+
+            var stopped = 0
+            var failed = 0
+            var stoppedKb = 0L
+
+            withContext(Dispatchers.IO) {
+                targets.forEach { app ->
+                    val result = actions.forceStop(app.packageName)
+                    if (result.ok) {
+                        stopped++
+                        if (!app.sharedUid) stoppedKb += app.rssKb
+                    } else {
+                        failed++
+                    }
+                }
+            }
+
+            _ui.value = _ui.value.copy(busyLabel = null, selection = emptySet())
+
+            val freedMemory = if (stoppedKb > 0) {
+                " Am eliberat ~${AppEntry.formatKb(stoppedKb)}."
+            } else {
+                ""
+            }
+            val skipped = when {
+                protectedOnes.isNotEmpty() -> " Sărite din lista albă: ${protectedOnes.size}."
+                else -> ""
+            }
+
+            if (failed == 0) {
+                showMessage("Am oprit $stopped aplicații.$freedMemory$skipped")
+            } else {
+                showMessage(
+                    "Am oprit $stopped aplicații, $failed au eșuat.$freedMemory$skipped",
+                    isError = true,
+                )
+            }
+
+            scan()
+        }
+    }
+
+    // ------------------------------------------------------------- selecție
+
+    /** Intră în modul de selecție cu pachetul dat (apăsare lungă pe rând). */
+    fun toggleSelection(packageName: String) {
+        val current = _ui.value.selection
+        _ui.value = _ui.value.copy(
+            selection = if (packageName in current) current - packageName else current + packageName,
+        )
+    }
+
+    /** Selectează tot ce se vede acum (după cautare și filtru). */
+    fun selectAllVisible() {
+        val visible = _ui.value.visible().map { it.packageName }.toSet()
+        _ui.value = _ui.value.copy(selection = visible)
+    }
+
+    fun clearSelection() {
+        _ui.value = _ui.value.copy(selection = emptySet())
+    }
+
+    // --------------------------------------------------------------- liste
+
+    /** Adaugă sau scoate din lista albă / neagră. */
+    fun toggleList(kind: AppLists.Kind, packageName: String) {
+        lists.toggle(kind, packageName)
+        applyLists()
+        val name = listName(kind)
+        val inside = packageName in lists.of(kind)
+        showMessage(
+            if (inside) "$packageName a fost adăugat în $name."
+            else "$packageName a fost scos din $name.",
+        )
+    }
+
+    /** Mută selecția curentă într-o listă și golește selecția. */
+    fun addSelectedToList(kind: AppLists.Kind) {
+        val selected = _ui.value.selection
+        if (selected.isEmpty()) {
+            showMessage("Nu ai selectat nicio aplicație.")
+            return
+        }
+        lists.add(kind, selected)
+        applyLists()
+        _ui.value = _ui.value.copy(selection = emptySet())
+        showMessage(
+            "Am adăugat ${selected.size} aplicații în ${listName(kind)}.",
+        )
+    }
+
+    fun clearList(kind: AppLists.Kind) {
+        lists.clear(kind)
+        applyLists()
+        showMessage("Am golit ${listName(kind)}.")
+    }
+
+    private fun applyLists() {
+        _ui.value = _ui.value.copy(
+            whiteList = lists.white(),
+            blackList = lists.black(),
+        )
+    }
+
+    private fun listName(kind: AppLists.Kind): String = when (kind) {
+        AppLists.Kind.WHITE -> "lista albă"
+        AppLists.Kind.BLACK -> "lista neagră"
     }
 
     fun backupOnly(app: AppEntry) {
@@ -379,6 +731,10 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
         _ui.value = _ui.value.copy(filter = filter)
     }
 
+    fun setSort(mode: SortMode) {
+        _ui.value = _ui.value.copy(sortMode = mode)
+    }
+
     fun clearMessage() {
         _ui.value = _ui.value.copy(message = null, messageIsError = false)
     }
@@ -409,6 +765,17 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
 
     companion object {
         private const val REQUEST_CODE = 4711
+
+        /** Cadența eșantionării cât timp ecranul e vizibil. */
+        private const val TICK_MS = 2_000L
+
+        /** Câte eșantioane ține graficul (60 × 2 s = 2 minute). */
+        private const val HISTORY_SIZE = 60
+
+        /** La fiecare atâtea tick-uri se reîmprospătează și pachetul din prim-plan. */
+        private const val FOREGROUND_EVERY = 8
+
+        private const val KEY_LIVE = "live_stats"
 
         fun formatDate(millis: Long): String =
             SimpleDateFormat("dd.MM.yyyy HH:mm", Locale("ro", "RO")).format(Date(millis))
