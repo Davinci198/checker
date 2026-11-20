@@ -13,6 +13,11 @@
     <!-- Backend Shizuku (rulează comenzile ca uid shell). -->
     <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
 
+    <!-- Paznicul CPU: notificarea de consum în fundal. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
     <application
         android:name=".CheckerApp"
         android:allowBackup="false"
@@ -37,6 +42,22 @@
             android:name=".shell.ShellUserService"
             android:enabled="true"
             android:exported="false" />
+
+        <!--
+            Monitorizarea consumului din fundal. Tipul `specialUse` e cel corect:
+            nu e muzică, navigație sau sincronizare, ci o citire periodică de
+            /proc la cererea explicită a utilizatorului. Android cere și o
+            descriere a motivului.
+        -->
+        <service
+            android:name=".watch.CpuWatchService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Monitorizeaza consumul de CPU al aplicatiilor din fundal, la cererea utilizatorului" />
+        </service>
 
         <provider
             android:name="rikka.shizuku.ShizukuProvider"
