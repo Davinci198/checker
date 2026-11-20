@@ -21,6 +21,9 @@ import ro.davinci.checker.data.AppActions
 import ro.davinci.checker.data.AppEntry
 import ro.davinci.checker.data.AppLists
 import ro.davinci.checker.data.AppScanner
+import ro.davinci.checker.data.BloatInfo
+import ro.davinci.checker.data.BloatVerdict
+import ro.davinci.checker.data.DebloatDb
 import ro.davinci.checker.data.StopSafety
 import ro.davinci.checker.data.SystemStats
 import ro.davinci.checker.shell.ShellController
@@ -39,6 +42,7 @@ enum class AppFilter(val label: String) {
     FROZEN("Înghețate"),
     WHITELIST("Listă albă"),
     BLACKLIST("Listă neagră"),
+    DEBLOAT("Debloat"),
 }
 
 /** Ordinea listei. `AUTO` alege memoria pentru tab-urile de procese. */
@@ -60,6 +64,8 @@ data class UiState(
     val sortMode: SortMode = SortMode.AUTO,
     val whiteList: Set<String> = emptySet(),
     val blackList: Set<String> = emptySet(),
+    /** Baza de debloat: pachet -> informații. Se încarcă o singură dată. */
+    val debloat: Map<String, BloatInfo> = emptyMap(),
     val selection: Set<String> = emptySet(),
     val stats: SystemStats = SystemStats.EMPTY,
     val cpuHistory: List<Float> = emptyList(),
@@ -124,8 +130,19 @@ data class UiState(
                 AppFilter.FROZEN -> app.isFrozen
                 AppFilter.WHITELIST -> app.packageName in whiteList
                 AppFilter.BLACKLIST -> app.packageName in blackList
+                AppFilter.DEBLOAT -> inDebloat(app)
             }
             matchesQuery && matchesFilter
+        }
+
+        // Tab-ul de debloat se ordonează mereu după verdict: ce e sigur de
+        // eliminat sus, ce e periculos jos. Sortarea aleasă de utilizator nu se
+        // aplică aici, fiindcă ordinea e chiar sensul listei.
+        if (filter == AppFilter.DEBLOAT) {
+            return filtered.sortedWith(
+                compareBy<AppEntry> { debloat[it.packageName]?.verdict?.order ?: Int.MAX_VALUE }
+                    .thenBy { it.label.lowercase() },
+            )
         }
 
         return when (effectiveSort()) {
@@ -155,7 +172,15 @@ data class UiState(
         AppFilter.FROZEN -> apps.count { it.isFrozen }
         AppFilter.WHITELIST -> apps.count { it.packageName in whiteList }
         AppFilter.BLACKLIST -> apps.count { it.packageName in blackList }
+        AppFilter.DEBLOAT -> apps.count { inDebloat(it) }
     }
+
+    /** Pachetul are un verdict util în baza de debloat. */
+    fun inDebloat(app: AppEntry): Boolean =
+        debloat[app.packageName]?.verdict?.let { it != BloatVerdict.UNKNOWN } == true
+
+    fun bloatOf(app: AppEntry): BloatInfo? =
+        debloat[app.packageName]?.takeIf { it.verdict != BloatVerdict.UNKNOWN }
 
     /** Memoria ocupată de procesele aplicațiilor, fără UID-uri partajate. */
     val runningMemoryKb: Long
@@ -175,6 +200,7 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
     private val scanner = AppScanner(application)
     private val backupStore = ApkBackup(application)
     private val lists = AppLists(application)
+    private val debloatDb = DebloatDb(application)
     private val prefs = application.getSharedPreferences("checker_prefs", Context.MODE_PRIVATE)
 
     private var liveJob: Job? = null
@@ -212,8 +238,17 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
             Shizuku.addRequestPermissionResultListener(permissionListener)
             Shizuku.addBinderReceivedListener(binderListener)
         }
+        loadDebloat()
         refreshBackups()
         autoConnect()
+    }
+
+    /** Baza de debloat se citește o singură dată, pe un fir de fundal. */
+    private fun loadDebloat() {
+        viewModelScope.launch {
+            val map = withContext(Dispatchers.IO) { debloatDb.load() }
+            if (map.isNotEmpty()) _ui.value = _ui.value.copy(debloat = map)
+        }
     }
 
     override fun onCleared() {

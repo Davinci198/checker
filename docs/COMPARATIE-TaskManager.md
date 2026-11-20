@@ -303,3 +303,23 @@ adăuga mai târziu, doar pentru aplicația deschisă în detaliu.
 ### Faza 2 — debloat UAD (de făcut)
 
 ### Faza 3 — SoC/temperaturi (de făcut)
+
+### Faza 2 — debloat UAD (implementată)
+
+- `assets/debloat.json` — 2400 pachete, câmpuri scurte: pachet, origine
+  (Oem/Aosp/Google/Carrier/Misc/Pending), verdict
+  (Recommended/Advanced/Expert/Unsafe) și descriere tăiată la 200 de caractere.
+  432 KB de text, comprimat de aapt în APK.
+- `data/DebloatDb.kt` — parsează o singură dată, pe fir de fundal, cu `org.json`
+  (fără Room, fără dependință nouă).
+- Filtru **Debloat** cu numărul de pachete instalate care au verdict (213 pe
+  acest telefon), ordonat după severitate: recomandat → avansat → experți → risc.
+- Etichetă pe rând (verde / chihlimbar / violet / roșu), card în fișa aplicației
+  cu originea, verdictul și explicația, plus avertisment în dialogul de
+  dezinstalare.
+
+Licență: datele provin din Universal Android Debloater (GPL-3.0), prin
+TaskManager (Apache 2.0). Atribuirea e în README; codul aplicației nu
+încorporează cod GPL.
+
+### Faza 3 — SoC/temperaturi (de făcut)

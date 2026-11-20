@@ -11,6 +11,14 @@ instalate pe telefon. Interfața este integral în română.
   ocupată (RSS) și dacă aplicația este în **prim-plan** sau în **fundal**.
 - **Sortează după memorie** — în tab-urile Rulează / Fundal / Oprire sigură
   lista e ordonată descrescător după RSS, cu totalul de memorie afișat sus.
+- **Consum în timp real**: un card sus arată CPU și RAM ca două grafice care se
+  mișcă la 2 secunde, plus swap, load average și numărul de nuclee. Fiecare
+  aplicație primește procentul ei de CPU, iar filtrul **Consum CPU** arată doar
+  ce trece de 1%. Eșantionarea merge numai cât timp ecranul e vizibil.
+- **Debloat**: baza de date UAD spune, pentru fiecare pachet preinstalat, dacă
+  poate fi eliminat (recomandat / avansat / experți / risc) și de ce. Filtrul
+  **Debloat** le arată pe cele instalate acum, ordonate după verdict, iar fișa
+  aplicației și dialogul de dezinstalare afișează avertismentul potrivit.
 - Spune **ce se poate opri în siguranță**: fiecare aplicație primește un verdict
   (oprire sigură / atenție / nu opri) și motivul lui, iar filtrul
   **Oprire sigură** arată doar aplicațiile care pot fi oprite fără efecte.
@@ -31,8 +39,9 @@ instalate pe telefon. Interfața este integral în română.
   `Download/Checker/apk-backup/<pachet>/<data>/`.
 - **Reinstalează** din copie, inclusiv pachetele cu split-uri
   (`pm install-create` → `install-write` → `install-commit`).
-- Filtre: Toate / Rulează / Fundal / Oprire sigură / Utilizator / Sistem /
-  Înghețate / Listă albă / Listă neagră, plus căutare după nume sau pachet.
+- Filtre: Toate / Rulează / Fundal / Consum CPU / Oprire sigură / Utilizator /
+  Sistem / Înghețate / Listă albă / Listă neagră / Debloat, plus căutare după
+  nume sau pachet.
 
 ## Siguranța la oprire
 
@@ -103,11 +112,13 @@ app/src/main/java/ro/davinci/checker/
 │   └── ShellController.kt               # alege backend-ul, ține starea
 ├── data/
 │   ├── AppEntry.kt / AppScanner.kt      # pachete, procese, prim-plan, informații
+│   ├── SystemStats.kt / LiveProbe.kt    # CPU/RAM/swap/load + jiffies per proces
+│   ├── DebloatDb.kt                     # verdicte de debloat din assets/debloat.json
 │   ├── AppSafety.kt                     # verdict de oprire + rolurile critice
 │   ├── AppActions.kt                    # îngheață / dezgheață / force-stop
 │   ├── ApkBackup.kt                     # copie APK + reinstalare
 │   └── IconCache.kt                     # icoane LRU pentru listă
-└── ui/                                  # Compose: temă, listă, fișă, backup-uri
+└── ui/                                  # Compose: temă, listă, fișă, grafice, backup-uri
 ```
 
 `tools/` conține scripturile pentru testare din terminal:
@@ -189,3 +200,15 @@ GitHub Release `v<versionName>` cu APK-ul atașat. Secrete necesare:
 - Aplicațiile cu administrator de dispozitiv activ nu pot fi dezinstalate până
   nu se revocă adminul.
 - Root nu este suportat.
+## Credite și licențe
+
+- Ideea de a citi CPU pe proces din `/proc/<pid>/stat` și structura bazei de
+  debloat vin din [TaskManager](https://github.com/RohitKushvaha01/TaskManager)
+  (Apache 2.0). Din el nu s-a preluat nimic din stratul comercial: Checker nu are
+  reclame, cumpărături în aplicație sau funcții „pro”.
+- `assets/debloat.json` derivă din lista
+  [Universal Android Debloater](https://github.com/Universal-Debloater-Alliance/universal-android-debloater-next-generation)
+  (GPL-3.0): pachet, origine, verdict și o descriere scurtă. Datele sunt
+  fapte despre pachete și sunt folosite aici cu atribuire; codul Checker rămâne
+  separat de ele.
+- Restul codului este scris pentru acest proiect.
