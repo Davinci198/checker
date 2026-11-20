@@ -15,8 +15,19 @@ instalate pe telefon. Interfața este integral în română.
   mișcă la 2 secunde, plus swap, load average și numărul de nuclee. Fiecare
   aplicație primește procentul ei de CPU, iar filtrul **Consum CPU** arată doar
   ce trece de 1%. Eșantionarea merge numai cât timp ecranul e vizibil.
-- **Debloat**: baza de date UAD spune, pentru fiecare pachet preinstalat, dacă
-  poate fi eliminat (recomandat / avansat / experți / risc) și de ce. Filtrul
+- **Context de sistem**: numele SoC-ului, cea mai caldă zonă termică (text
+  chihlimbar peste 50 °C, roșu peste 60 °C, cu avertismentul că telefonul
+  frânează termic) și plafonul de frecvență al clusterelor. Sarcina GPU apare
+  doar unde nucleul permite citirea din uid `shell` — pe Android 16 SELinux
+  închide `/sys/class/kgsl`, deci rândul lipsește.
+- **Fire de execuție** pentru fiecare aplicație, în fișă; cardul arată și cât a
+  durat citirea, când trece de 1,5 s.
+- **Paznic CPU în fundal**: un comutator pornește un serviciu în prim-plan care
+  citește consumul la 45 s și anunță aplicațiile ce trec de 25% dintr-un nucleu
+  două eșantioane la rând (90 s), deși nu sunt pe ecran. Lista albă e respectată,
+  procesele de sistem sunt ignorate, iar același pachet nu e anunțat mai des de
+  20 de minute. Nu oprește nimic singur: anunță și atât.
+- **Debloat**: baza de date UAD spune, pentru fiecare pachet preinstalat, dacă  poate fi eliminat (recomandat / avansat / experți / risc) și de ce. Filtrul
   **Debloat** le arată pe cele instalate acum, ordonate după verdict, iar fișa
   aplicației și dialogul de dezinstalare afișează avertismentul potrivit.
 - Spune **ce se poate opri în siguranță**: fiecare aplicație primește un verdict
@@ -61,10 +72,11 @@ prim-plan vin dintr-o singură citire `dumpsys activity services`, filtrată pe
 `isForeground=true`.
 
 Fiecare fișă de aplicație arată și informații despre pachet: versiune, UID,
-procese, memorie, SDK țintă/minim, data instalării și a ultimei actualizări,
-sursa instalării (`com.android.vending`, `com.google.android.packageinstaller`
-etc.), numărul de permisiuni cerute și câte sunt periculoase, dacă are iconiță
-în sertar și dacă are serviciu în prim-plan.
+procese, fire de execuție, memorie, SDK țintă/minim, data instalării și a
+ultimei actualizări, sursa instalării (`com.android.vending`,
+`com.google.android.packageinstaller` etc.), numărul de permisiuni cerute și
+câte sunt periculoase, dacă are iconiță în sertar și dacă are serviciu în
+prim-plan.
 
 **Memoria partajată:** pachetele care împart un UID (de exemplu uid 1000, adică
 `system_server`) raportează aceleași procese. Aplicația le arată ca „partajat” și
@@ -118,6 +130,9 @@ app/src/main/java/ro/davinci/checker/
 │   ├── AppActions.kt                    # îngheață / dezgheață / force-stop
 │   ├── ApkBackup.kt                     # copie APK + reinstalare
 │   └── IconCache.kt                     # icoane LRU pentru listă
+├── watch/
+│   ├── CpuWatch.kt                      # setările paznicului CPU + canalul
+│   └── CpuWatchService.kt               # serviciu în prim-plan, eșantion la 45 s
 └── ui/                                  # Compose: temă, listă, fișă, grafice, backup-uri
 ```
 
@@ -200,6 +215,14 @@ GitHub Release `v<versionName>` cu APK-ul atașat. Secrete necesare:
 - Aplicațiile cu administrator de dispozitiv activ nu pot fi dezinstalate până
   nu se revocă adminul.
 - Root nu este suportat.
+- **Sarcina GPU** nu poate fi citită pe Android 16 fără root: SELinux închide
+  `/sys/class/kgsl` chiar și pentru uid `shell` (pe acest telefon, orice citire
+  din `kgsl-3d0` dă „Permission denied”). Rândul apare doar pe nucleele care
+  expun `gpubusy` cu drept de citire.
+- **Paznicul CPU** cere permisiunea de notificări (Android 13+) și acces la
+  shell. Fără shell trei eșantioane la rând, serviciul se oprește și spune de ce.
+  Monitorizează doar aplicațiile de utilizator (uid ≥ 10 000), nu procesele de
+  sistem.
 ## Credite și licențe
 
 - Ideea de a citi CPU pe proces din `/proc/<pid>/stat` și structura bazei de
