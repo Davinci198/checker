@@ -100,6 +100,8 @@ import ro.davinci.checker.SortMode
 import ro.davinci.checker.UiState
 import ro.davinci.checker.data.AppEntry
 import ro.davinci.checker.data.AppLists
+import ro.davinci.checker.data.BloatInfo
+import ro.davinci.checker.data.BloatVerdict
 import ro.davinci.checker.data.IconCache
 import ro.davinci.checker.data.StopSafety
 
@@ -304,6 +306,16 @@ fun CheckerApp(vm: CheckerViewModel) {
                 )
             }
 
+            if (ui.filter == AppFilter.DEBLOAT) {
+                Text(
+                    text = "Pachete preinstalate, după verdictul bazei de date UAD: " +
+                        "verde = poate fi eliminat, roșu = nu. Listează doar ce e instalat acum.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                )
+            }
+
             Spacer(Modifier.height(6.dp))
 
             val visible = remember(
@@ -314,6 +326,7 @@ fun CheckerApp(vm: CheckerViewModel) {
                 ui.foregroundPackage,
                 ui.whiteList,
                 ui.blackList,
+                ui.debloat,
             ) {
                 ui.visible()
             }
@@ -352,6 +365,7 @@ fun CheckerApp(vm: CheckerViewModel) {
                                 ui.filter == AppFilter.WHITELIST ||
                                 ui.filter == AppFilter.BLACKLIST,
                             safety = ui.safetyOf(app),
+                            bloat = ui.bloatOf(app),
                             selecting = ui.selecting,
                             selected = app.packageName in ui.selection,
                             inWhiteList = app.packageName in ui.whiteList,
@@ -378,6 +392,7 @@ fun CheckerApp(vm: CheckerViewModel) {
             connected = ui.connected,
             safety = ui.safetyOf(selected),
             safetyReason = ui.safetyReasonOf(selected),
+            bloat = ui.bloatOf(selected),
             inWhiteList = selected.packageName in ui.whiteList,
             inBlackList = selected.packageName in ui.blackList,
             onDismiss = { selectedPackage = null },
@@ -417,6 +432,16 @@ fun CheckerApp(vm: CheckerViewModel) {
                         },
                         style = MaterialTheme.typography.bodyMedium,
                     )
+                    val pendingBloat = ui.bloatOf(pendingApp)
+                    if (pendingBloat != null) {
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            text = "Debloat: ${pendingBloat.verdict.label}. " +
+                                pendingBloat.description.take(160),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = bloatColor(pendingBloat.verdict),
+                        )
+                    }
                     Spacer(Modifier.height(12.dp))
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -830,6 +855,15 @@ private fun safetyColor(safety: StopSafety): Color = when (safety) {
     StopSafety.NEVER -> CheckerRed
 }
 
+/** Culoarea verdictului de debloat: verde = sigur de eliminat, roșu = nu. */
+private fun bloatColor(verdict: BloatVerdict): Color = when (verdict) {
+    BloatVerdict.RECOMMENDED -> CheckerGreen
+    BloatVerdict.ADVANCED -> CheckerAmber
+    BloatVerdict.EXPERT -> CheckerViolet
+    BloatVerdict.UNSAFE -> CheckerRed
+    BloatVerdict.UNKNOWN -> CheckerBlue
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AppRow(
@@ -837,6 +871,7 @@ private fun AppRow(
     isForeground: Boolean,
     showSafety: Boolean,
     safety: StopSafety,
+    bloat: BloatInfo?,
     selecting: Boolean,
     selected: Boolean,
     inWhiteList: Boolean,
@@ -900,6 +935,9 @@ private fun AppRow(
                 if (showSafety && app.running && !inWhiteList) {
                     Badge(app.safety.short, safetyColor(safety))
                 }
+                if (bloat != null) {
+                    Badge(bloat.shortLabel, bloatColor(bloat.verdict))
+                }
             }
         }
 
@@ -938,6 +976,7 @@ private fun AppDetailSheet(
     connected: Boolean,
     safety: StopSafety,
     safetyReason: String,
+    bloat: BloatInfo?,
     inWhiteList: Boolean,
     inBlackList: Boolean,
     onDismiss: () -> Unit,
@@ -1036,6 +1075,11 @@ private fun AppDetailSheet(
 
             SafetyCard(safety = safety, reason = safetyReason)
 
+            if (bloat != null) {
+                Spacer(Modifier.height(10.dp))
+                BloatCard(bloat)
+            }
+
             Spacer(Modifier.height(14.dp))
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1121,6 +1165,55 @@ private fun AppDetailSheet(
                 Icon(Icons.Default.Delete, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(8.dp))
                 Text("Dezinstalează")
+            }
+        }
+    }
+}
+
+@Composable
+private fun BloatCard(bloat: BloatInfo) {
+    val color = bloatColor(bloat.verdict)
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = color.copy(alpha = 0.10f)),
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                    tint = color,
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "Debloat: ${bloat.verdict.label}",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = color,
+                    modifier = Modifier.weight(1f),
+                )
+                Badge(bloat.originLabel, color)
+            }
+            if (bloat.description.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = bloat.description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+            if (bloat.verdict.needsWarning) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = if (bloat.verdict == BloatVerdict.UNSAFE) {
+                        "Nu dezinstala: alte aplicații sau funcții ale telefonului depind de ea."
+                    } else {
+                        "Dezinstalarea poate strica o funcție a telefonului. Fă un backup înainte."
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = color,
+                )
             }
         }
     }
