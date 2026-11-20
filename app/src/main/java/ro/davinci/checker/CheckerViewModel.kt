@@ -414,7 +414,7 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
      * deci aplicația e în prim-plan și Android permite un serviciu în prim-plan.
      */
     fun setCpuWatch(enabled: Boolean) {
-        CpuWatch.setEnabled(application, enabled)
+        CpuWatch.setEnabled(getApplication<Application>(), enabled)
         _ui.value = _ui.value.copy(cpuWatch = enabled)
         if (enabled) {
             showMessage("Paznicul CPU e pornit: primești un anunț când o aplicație arde CPU în fundal.")
