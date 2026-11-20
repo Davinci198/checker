@@ -62,6 +62,8 @@ class LiveProbe {
         val (cpuPercent, cpuTimes) = parseCpu(statBlock, previousCpu)
         previousCpu = cpuTimes
 
+        val (hottestC, hottestZone) = parseThermal(blocks[THERM] ?: "")
+
         val ramTotal = memKb(memBlock, "MemTotal")
         val ramFree = memKb(memBlock, "MemAvailable").takeIf { it > 0 }
             ?: memKb(memBlock, "MemFree")
@@ -76,6 +78,9 @@ class LiveProbe {
             swapTotalKb = swapTotal,
             load1 = loadBlock.trim().substringBefore(' ').toFloatOrNull() ?: 0f,
             cores = statBlock.lineSequence().count { CORE_REGEX.matches(it.substringBefore(' ')) },
+            hottestC = hottestC,
+            hottestZone = hottestZone,
+            clusters = parseClusters(blocks[FREQ] ?: ""),
         )
 
         val buckets = HashMap<Int, Bucket>()
@@ -167,6 +172,44 @@ class LiveProbe {
         return percent to current
     }
 
+    /**
+     * Zonele termice: `tip|miligrade`. Unele drivere raportează zecimi de grad
+     * sau grade întregi, deci se normalizează după mărime.
+     */
+    private fun parseThermal(block: String): Pair<Float, String> {
+        var hottest = 0f
+        var zone = ""
+        block.lineSequence().forEach { line ->
+            val name = line.substringBefore('|').trim()
+            val raw = line.substringAfter('|', "").trim().toFloatOrNull() ?: return@forEach
+            val celsius = when {
+                raw >= 1_000f -> raw / 1_000f
+                raw >= 200f -> raw / 10f
+                else -> raw
+            }
+            if (celsius in 1f..150f && celsius > hottest) {
+                hottest = celsius
+                zone = name
+            }
+        }
+        return hottest to zone
+    }
+
+    /** Clusterele cpufreq: `policy0|0,1,2,3|<curent kHz>|<max kHz>`. */
+    private fun parseClusters(block: String): List<CpuCluster> =
+        block.lineSequence().mapNotNull { line ->
+            val parts = line.split('|')
+            if (parts.size < 4) return@mapNotNull null
+            val policy = parts[0].trim().ifBlank { return@mapNotNull null }
+            val max = parts[3].trim().toIntOrNull() ?: 0
+            CpuCluster(
+                policy = policy,
+                cpus = parts[1].trim(),
+                currentMhz = (parts[2].trim().toIntOrNull() ?: 0) / 1_000,
+                maxMhz = max / 1_000,
+            )
+        }.toList().sortedBy { it.policy }
+
     private fun memKb(block: String, key: String): Long =
         block.lineSequence()
             .firstOrNull { it.startsWith("$key:") }
@@ -208,8 +251,10 @@ class LiveProbe {
         private const val LOAD = "@@CHECKER_LOAD"
         private const val PROC = "@@CHECKER_PROC"
         private const val JIFF = "@@CHECKER_JIFF"
+        private const val THERM = "@@CHECKER_THERM"
+        private const val FREQ = "@@CHECKER_FREQ"
 
-        private val MARKERS = setOf(STAT, MEM, LOAD, PROC, JIFF)
+        private val MARKERS = setOf(STAT, MEM, LOAD, PROC, JIFF, THERM, FREQ)
 
         private val PS_REGEX = Regex("""^\s*(\d+)\s+(\d+)\s+(\d+)\s*$""")
         private val JIFFIES_REGEX = Regex("""^\s*(\d+)\s+(\d+)\s*$""")
@@ -222,7 +267,14 @@ class LiveProbe {
             append("echo $LOAD; cat /proc/loadavg; ")
             append("echo $PROC; ps -A -o PID,UID,RSS; ")
             append("echo $JIFF; ")
-            append("awk '{split(FILENAME,a,\"/\"); print a[3], \$14+\$15}' /proc/[0-9]*/stat")
+            append("awk '{split(FILENAME,a,\"/\"); print a[3], \$14+\$15}' /proc/[0-9]*/stat; ")
+            append("echo $THERM; ")
+            append("for z in /sys/class/thermal/thermal_zone*; do ")
+            append("echo \"\$(cat \$z/type 2>/dev/null)|\$(cat \$z/temp 2>/dev/null)\"; done; ")
+            append("echo $FREQ; ")
+            append("for p in /sys/devices/system/cpu/cpufreq/policy*; do ")
+            append("echo \"\${p##*/}|\$(cat \$p/related_cpus 2>/dev/null | tr ' ' ',')|")
+            append("\$(cat \$p/scaling_cur_freq 2>/dev/null)|\$(cat \$p/cpuinfo_max_freq 2>/dev/null)\"; done")
         }
     }
 }
