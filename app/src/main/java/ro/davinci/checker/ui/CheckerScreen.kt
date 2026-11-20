@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.foundation.ExperimentalFoundationApi
+import android.os.Build
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -591,8 +592,48 @@ private fun StatsCard(
                     )
                 }
             }
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = "${socLabel()} · ${stats.tempLabel}" +
+                        if (stats.hottestZone.isNotBlank()) " (${stats.hottestZone})" else "",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = when (stats.heatLevel) {
+                        2 -> CheckerRed
+                        1 -> CheckerAmber
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+                Text(
+                    text = "max ${stats.maxFreqLabel}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (stats.heatLevel == 2) {
+                    Text(
+                        text = "· prea cald, telefonul frânează",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = CheckerRed,
+                    )
+                }
+            }
         }
     }
+}
+
+/** Numele SoC-ului, cum îl raportează Android (API 31+) sau șasiul. */
+private fun socLabel(): String {
+    val model = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        Build.SOC_MODEL
+    } else {
+        ""
+    }
+    return model.ifBlank { Build.HARDWARE }.ifBlank { "SoC" }
 }
 
 @Composable
