@@ -3,6 +3,11 @@ package ro.davinci.checker.ui
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.ExperimentalFoundationApi
 import android.os.Build
 import androidx.compose.foundation.background
@@ -234,6 +239,7 @@ fun CheckerApp(vm: CheckerViewModel) {
                 StatsCard(
                     ui = ui,
                     onToggleLive = vm::setLiveEnabled,
+                    onToggleCpuWatch = vm::setCpuWatch,
                     onShowHot = { vm.setFilter(AppFilter.HOT) },
                 )
             }
@@ -510,6 +516,7 @@ fun CheckerApp(vm: CheckerViewModel) {
 private fun StatsCard(
     ui: UiState,
     onToggleLive: (Boolean) -> Unit,
+    onToggleCpuWatch: (Boolean) -> Unit,
     onShowHot: () -> Unit,
 ) {
     val stats = ui.stats
@@ -645,13 +652,56 @@ private fun StatsCard(
                     modifier = Modifier.padding(top = 2.dp),
                 )
             }
+
+            // Paznicul CPU: monitorizare și când aplicația nu e pe ecran.
+            // Android 13+ cere permisiune separată pentru notificări, iar fără
+            // ea serviciul ar rula fără să poată anunța nimic.
+            val context = LocalContext.current
+            val permissionLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission(),
+            ) { granted ->
+                if (granted) onToggleCpuWatch(true)
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Paznic CPU în fundal",
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                    Text(
+                        text = "Anunță aplicațiile care ard CPU cât timp nu sunt pe ecran.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = ui.cpuWatch,
+                    onCheckedChange = { wanted ->
+                        when {
+                            !wanted -> onToggleCpuWatch(false)
+                            needsNotificationPermission(context) ->
+                                permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            else -> onToggleCpuWatch(true)
+                        }
+                    },
+                    modifier = Modifier.padding(start = 8.dp).height(24.dp),
+                )
+            }
         }
     }
 }
 
+/** Pe Android 13+ notificările cer permisiune explicită. */
+private fun needsNotificationPermission(context: Context): Boolean =
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) !=
+        PackageManager.PERMISSION_GRANTED
+
 /** Numele SoC-ului, cum îl raportează Android (API 31+) sau șasiul. */
-private fun socLabel(): String {
-    val model = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+private fun socLabel(): String {    val model = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         Build.SOC_MODEL
     } else {
         ""

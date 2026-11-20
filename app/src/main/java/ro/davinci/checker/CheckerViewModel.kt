@@ -27,6 +27,7 @@ import ro.davinci.checker.data.DebloatDb
 import ro.davinci.checker.data.StopSafety
 import ro.davinci.checker.data.SystemStats
 import ro.davinci.checker.shell.ShellController
+import ro.davinci.checker.watch.CpuWatch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -71,6 +72,8 @@ data class UiState(
     val cpuHistory: List<Float> = emptyList(),
     val ramHistory: List<Float> = emptyList(),
     val liveEnabled: Boolean = true,
+    /** Paznicul CPU din fundal (notificări pentru consum mare). */
+    val cpuWatch: Boolean = false,
     val loading: Boolean = false,
     val busyLabel: String? = null,
     val message: String? = null,
@@ -214,6 +217,7 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
             whiteList = lists.white(),
             blackList = lists.black(),
             liveEnabled = prefs.getBoolean(KEY_LIVE, true),
+            cpuWatch = CpuWatch.isEnabled(application),
         ),
     )
     val ui: StateFlow<UiState> = _ui.asStateFlow()
@@ -403,6 +407,18 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
         prefs.edit().putBoolean(KEY_LIVE, enabled).apply()
         _ui.value = _ui.value.copy(liveEnabled = enabled)
         syncLive()
+    }
+
+    /**
+     * Pornește sau oprește paznicul CPU. Serviciul se pornește din interfață,
+     * deci aplicația e în prim-plan și Android permite un serviciu în prim-plan.
+     */
+    fun setCpuWatch(enabled: Boolean) {
+        CpuWatch.setEnabled(application, enabled)
+        _ui.value = _ui.value.copy(cpuWatch = enabled)
+        if (enabled) {
+            showMessage("Paznicul CPU e pornit: primești un anunț când o aplicație arde CPU în fundal.")
+        }
     }
 
     private fun syncLive() {
