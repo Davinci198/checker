@@ -23,6 +23,8 @@ data class AppEntry(
     val hasForegroundService: Boolean = false,
     /** UID-ul e împărțit cu alte pachete (ex. uid 1000 = system_server). */
     val sharedUid: Boolean = false,
+    /** CPU instantaneu al proceselor pachetului, în procente dintr-un nucleu. */
+    val cpuPercent: Float = 0f,
     val safety: StopSafety = StopSafety.SAFE,
     val safetyReason: String = "",
 ) {
@@ -44,6 +46,17 @@ data class AppEntry(
     /** Primul PID, gata de afișat. */
     val pidLabel: String = pids.firstOrNull()?.let { "PID $it" }.orEmpty()
 
+    /**
+     * Procentul de CPU, gata de afișat.
+     * Sub 0,1% nu are sens să scriem nimic: ar umple rândul cu zgomot.
+     */
+    val cpuLabel: String = when {
+        cpuPercent >= 10f -> "%.0f%%".format(cpuPercent)
+        cpuPercent >= 1f -> "%.1f%%".format(cpuPercent)
+        cpuPercent >= 0.1f -> "<1%"
+        else -> ""
+    }
+
     /** Poate fi oprită fără să afecteze telefonul, cât timp rulează. */
     val safeToStop: Boolean get() = safety == StopSafety.SAFE
 
@@ -62,6 +75,7 @@ data class ScanResult(
     val foregroundPackage: String? = null,
     val shellKind: String? = null,
     val warning: String? = null,
+    val stats: SystemStats = SystemStats.EMPTY,
 )
 
 fun formatKb(kb: Long): String = AppEntry.formatKb(kb)

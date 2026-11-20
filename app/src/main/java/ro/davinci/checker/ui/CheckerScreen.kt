@@ -64,12 +64,14 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -85,6 +87,9 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.Dispatchers
@@ -110,6 +115,21 @@ fun CheckerApp(vm: CheckerViewModel) {
     var selectedPackage by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingUninstall by rememberSaveable { mutableStateOf<String?>(null) }
     var backupBeforeUninstall by rememberSaveable { mutableStateOf(true) }
+
+    // Eșantionarea live merge doar cât timp ecranul e vizibil: în fundal ar
+    // consuma baterie ca să deseneze grafice pe care nimeni nu le vede.
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> vm.onScreenVisible()
+                Lifecycle.Event.ON_STOP -> vm.onScreenHidden()
+                else -> Unit
+            }
+        }
+        lifecycle.addObserver(observer)
+        onDispose { lifecycle.removeObserver(observer) }
+    }
 
     LaunchedEffect(ui.message) {
         val message = ui.message ?: return@LaunchedEffect
@@ -205,6 +225,14 @@ fun CheckerApp(vm: CheckerViewModel) {
 
             if (ui.loading) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+
+            if (ui.connected && ui.stats.ramTotalKb > 0) {
+                StatsCard(
+                    ui = ui,
+                    onToggleLive = vm::setLiveEnabled,
+                    onShowHot = { vm.setFilter(AppFilter.HOT) },
+                )
             }
 
             OutlinedTextField(
@@ -445,6 +473,141 @@ fun CheckerApp(vm: CheckerViewModel) {
     }
 }
 
+/**
+ * Consumul sistemului, în timp real: CPU și RAM ca linii care se mișcă,
+ * apoi swap, load și numărul de nuclee.
+ *
+ * Butonul din dreapta oprește eșantionarea — util pe baterie sau când vrei să
+ * citești lista fără ca numerele să se schimbe sub deget.
+ */
+@Composable
+private fun StatsCard(
+    ui: UiState,
+    onToggleLive: (Boolean) -> Unit,
+    onShowHot: () -> Unit,
+) {
+    val stats = ui.stats
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+        ),
+        shape = RoundedCornerShape(14.dp),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Consum în timp real",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = if (ui.liveEnabled) "pornit" else "oprit",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Switch(
+                    checked = ui.liveEnabled,
+                    onCheckedChange = onToggleLive,
+                    modifier = Modifier.padding(start = 6.dp).height(24.dp),
+                )
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                SparkBlock(
+                    title = "CPU",
+                    value = stats.cpuLabel,
+                    values = ui.cpuHistory,
+                    max = 100f,
+                    color = CheckerAmber,
+                    onClick = onShowHot,
+                    modifier = Modifier.weight(1f),
+                )
+                SparkBlock(
+                    title = "RAM",
+                    value = "${"%.0f".format(stats.ramPercent)}%",
+                    values = ui.ramHistory,
+                    max = 100f,
+                    color = CheckerBlue,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = stats.ramLabel,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (stats.hasSwap) {
+                    Text(
+                        text = "swap ${stats.swapLabel}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    text = "load ${stats.loadLabel}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (stats.cores > 0) {
+                    Text(
+                        text = "${stats.cores} nuclee",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SparkBlock(
+    title: String,
+    value: String,
+    values: List<Float>,
+    max: Float,
+    color: Color,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+) {
+    Column(
+        modifier = if (onClick != null) {
+            modifier.clip(RoundedCornerShape(8.dp)).combinedClickable(
+                onClick = onClick,
+                onLongClick = onClick,
+            )
+        } else {
+            modifier
+        },
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f),
+            )
+            Text(
+                text = value,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = color,
+            )
+        }
+        Sparkline(values = values, max = max, color = color)
+    }
+}
+
 private fun connectionLine(ui: UiState): String = when (val state = ui.connection) {
     is ro.davinci.checker.shell.ShellController.State.Connected -> state.label
     is ro.davinci.checker.shell.ShellController.State.Connecting -> "Mă conectez…"
@@ -613,7 +776,8 @@ private fun SelectionBar(
 private fun SortRow(ui: UiState, onSort: (SortMode) -> Unit) {
     val runningView = ui.filter == AppFilter.RUNNING ||
         ui.filter == AppFilter.BACKGROUND ||
-        ui.filter == AppFilter.SAFE_STOP
+        ui.filter == AppFilter.SAFE_STOP ||
+        ui.filter == AppFilter.HOT
 
     Row(
         modifier = Modifier
@@ -628,6 +792,9 @@ private fun SortRow(ui: UiState, onSort: (SortMode) -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         SortChip("Memorie", ui.effectiveSort() == SortMode.RAM) { onSort(SortMode.RAM) }
+        if (runningView) {
+            SortChip("CPU", ui.effectiveSort() == SortMode.CPU) { onSort(SortMode.CPU) }
+        }
         SortChip("Nume", ui.effectiveSort() == SortMode.NAME) { onSort(SortMode.NAME) }
 
         Spacer(Modifier.weight(1f))
@@ -737,6 +904,14 @@ private fun AppRow(
         }
 
         Column(horizontalAlignment = Alignment.End) {
+            if (app.cpuPercent >= 0.1f && app.cpuLabel.isNotEmpty()) {
+                Text(
+                    text = app.cpuLabel,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = CheckerAmber,
+                )
+            }
             if (app.memoryLabel.isNotEmpty()) {
                 Text(
                     text = app.memoryLabel,
@@ -833,6 +1008,7 @@ private fun AppDetailSheet(
             KeyValueRow("UID", app.uid.toString())
             KeyValueRow("Versiune", app.versionName)
             KeyValueRow("Procese", if (app.pids.isEmpty()) "—" else app.pids.joinToString(", "))
+            KeyValueRow("CPU", if (app.cpuPercent >= 0.1f) app.cpuLabel else "—")
             KeyValueRow("Memorie", if (app.rssKb > 0) app.memoryLabel else "—")
             KeyValueRow("Fișiere APK", app.apkPaths.size.toString())
             KeyValueRow("SDK", if (app.targetSdk > 0) "${app.targetSdk} (min ${app.minSdk})" else "—")

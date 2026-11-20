@@ -1,14 +1,18 @@
 package ro.davinci.checker
 
 import android.app.Application
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
@@ -18,6 +22,7 @@ import ro.davinci.checker.data.AppEntry
 import ro.davinci.checker.data.AppLists
 import ro.davinci.checker.data.AppScanner
 import ro.davinci.checker.data.StopSafety
+import ro.davinci.checker.data.SystemStats
 import ro.davinci.checker.shell.ShellController
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -27,6 +32,7 @@ enum class AppFilter(val label: String) {
     ALL("Toate"),
     RUNNING("Rulează"),
     BACKGROUND("Fundal"),
+    HOT("Consum CPU"),
     SAFE_STOP("Oprire sigură"),
     USER("Utilizator"),
     SYSTEM("Sistem"),
@@ -39,6 +45,7 @@ enum class AppFilter(val label: String) {
 enum class SortMode(val label: String) {
     AUTO("Automat"),
     RAM("Memorie"),
+    CPU("CPU"),
     NAME("Nume"),
 }
 
@@ -54,6 +61,10 @@ data class UiState(
     val whiteList: Set<String> = emptySet(),
     val blackList: Set<String> = emptySet(),
     val selection: Set<String> = emptySet(),
+    val stats: SystemStats = SystemStats.EMPTY,
+    val cpuHistory: List<Float> = emptyList(),
+    val ramHistory: List<Float> = emptyList(),
+    val liveEnabled: Boolean = true,
     val loading: Boolean = false,
     val busyLabel: String? = null,
     val message: String? = null,
@@ -87,10 +98,11 @@ data class UiState(
 
     /** Ce ordine se aplică efectiv pentru filtrul curent. */
     fun effectiveSort(): SortMode = when (sortMode) {
-        SortMode.AUTO ->
-            if (filter == AppFilter.RUNNING || filter == AppFilter.BACKGROUND ||
-                filter == AppFilter.SAFE_STOP
-            ) SortMode.RAM else SortMode.NAME
+        SortMode.AUTO -> when (filter) {
+            AppFilter.HOT -> SortMode.CPU
+            AppFilter.RUNNING, AppFilter.BACKGROUND, AppFilter.SAFE_STOP -> SortMode.RAM
+            else -> SortMode.NAME
+        }
         else -> sortMode
     }
 
@@ -105,6 +117,7 @@ data class UiState(
                 AppFilter.ALL -> true
                 AppFilter.RUNNING -> app.running
                 AppFilter.BACKGROUND -> app.running && app.packageName != foregroundPackage
+                AppFilter.HOT -> app.running && app.cpuPercent >= HOT_THRESHOLD
                 AppFilter.SAFE_STOP -> app.running && safeToStop(app)
                 AppFilter.USER -> !app.isSystem
                 AppFilter.SYSTEM -> app.isSystem
@@ -120,6 +133,10 @@ data class UiState(
                 compareByDescending<AppEntry> { it.ownRssKb }
                     .thenBy { it.label.lowercase() },
             )
+            SortMode.CPU -> filtered.sortedWith(
+                compareByDescending<AppEntry> { it.cpuPercent }
+                    .thenBy { it.label.lowercase() },
+            )
             else -> filtered.sortedWith(
                 compareBy<AppEntry> { it.isFrozen }.thenBy { it.label.lowercase() },
             )
@@ -131,6 +148,7 @@ data class UiState(
         AppFilter.RUNNING -> apps.count { it.running }
         AppFilter.BACKGROUND ->
             apps.count { it.running && it.packageName != foregroundPackage }
+        AppFilter.HOT -> apps.count { it.running && it.cpuPercent >= HOT_THRESHOLD }
         AppFilter.SAFE_STOP -> apps.count { it.running && safeToStop(it) }
         AppFilter.USER -> apps.count { !it.isSystem }
         AppFilter.SYSTEM -> apps.count { it.isSystem }
@@ -144,6 +162,11 @@ data class UiState(
         get() = apps.asSequence()
             .filter { it.running && !it.sharedUid }
             .sumOf { it.rssKb }
+
+    companion object {
+        /** De la acest procent o aplicație e considerată consumator de CPU. */
+        const val HOT_THRESHOLD = 1f
+    }
 }
 
 class CheckerViewModel(application: Application) : AndroidViewModel(application) {
@@ -152,6 +175,11 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
     private val scanner = AppScanner(application)
     private val backupStore = ApkBackup(application)
     private val lists = AppLists(application)
+    private val prefs = application.getSharedPreferences("checker_prefs", Context.MODE_PRIVATE)
+
+    private var liveJob: Job? = null
+    private var screenVisible = false
+    private var tickCount = 0
 
     private val _ui = MutableStateFlow(
         UiState(
@@ -159,6 +187,7 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
             adbPort = shellController.adbPort.toString(),
             whiteList = lists.white(),
             blackList = lists.black(),
+            liveEnabled = prefs.getBoolean(KEY_LIVE, true),
         ),
     )
     val ui: StateFlow<UiState> = _ui.asStateFlow()
@@ -188,6 +217,7 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
     }
 
     override fun onCleared() {
+        liveJob?.cancel()
         runCatching {
             Shizuku.removeRequestPermissionResultListener(permissionListener)
             Shizuku.removeBinderReceivedListener(binderListener)
@@ -284,6 +314,7 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
             connection = shellController.state,
             connectionError = shellController.lastError,
         )
+        syncLive()
     }
 
     // --------------------------------------------------------------- scanare
@@ -296,13 +327,101 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
             val backend = shellController.backend
             val result = withContext(Dispatchers.IO) { scanner.scan(backend) }
 
-            _ui.value = _ui.value.copy(
+            val previous = _ui.value
+            val hasStats = result.stats.ramTotalKb > 0
+            _ui.value = previous.copy(
                 apps = result.apps,
                 foregroundPackage = result.foregroundPackage,
                 warning = result.warning,
                 loading = false,
+                stats = result.stats.takeIf { hasStats } ?: previous.stats,
+                cpuHistory = if (hasStats) {
+                    (previous.cpuHistory + result.stats.cpuPercent).takeLast(HISTORY_SIZE)
+                } else {
+                    previous.cpuHistory
+                },
+                ramHistory = if (hasStats) {
+                    (previous.ramHistory + result.stats.ramPercent).takeLast(HISTORY_SIZE)
+                } else {
+                    previous.ramHistory
+                },
             )
+            syncLive()
         }
+    }
+
+    // ------------------------------------------------------------ live stats
+
+    /** Ecranul e vizibil: pornește eșantionarea dacă utilizatorul nu a oprit-o. */
+    fun onScreenVisible() {
+        screenVisible = true
+        syncLive()
+    }
+
+    fun onScreenHidden() {
+        screenVisible = false
+        syncLive()
+    }
+
+    /** Pornește sau oprește graficele live (alegerea se ține minte). */
+    fun setLiveEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_LIVE, enabled).apply()
+        _ui.value = _ui.value.copy(liveEnabled = enabled)
+        syncLive()
+    }
+
+    private fun syncLive() {
+        val state = _ui.value
+        val shouldRun = screenVisible && state.liveEnabled && state.connected
+        if (!shouldRun) {
+            liveJob?.cancel()
+            liveJob = null
+            return
+        }
+        if (liveJob?.isActive == true) return
+
+        liveJob = viewModelScope.launch {
+            while (isActive) {
+                tick()
+                delay(TICK_MS)
+            }
+        }
+    }
+
+    /**
+     * Un tick: o singură comandă shell pentru CPU/RAM/procese, apoi se
+     * actualizează doar câmpurile care se schimbă. Lista de pachete nu se
+     * rescană — altfel ar însemna 551 de intrări la fiecare 2 secunde.
+     */
+    private suspend fun tick() {
+        val backend = shellController.backend ?: return
+        val sample = withContext(Dispatchers.IO) { scanner.sample(backend) }
+        if (sample.error != null) return
+
+        tickCount++
+        val foreground = if (tickCount % FOREGROUND_EVERY == 0) {
+            withContext(Dispatchers.IO) { scanner.foreground(backend) }
+        } else {
+            null
+        }
+
+        val state = _ui.value
+        val apps = state.apps.map { app ->
+            val proc = sample.processes[app.uid]
+            if (proc == null) {
+                app.copy(pids = emptyList(), rssKb = 0, cpuPercent = 0f)
+            } else {
+                app.copy(pids = proc.pids, rssKb = proc.rssKb, cpuPercent = proc.cpuPercent)
+            }
+        }
+
+        _ui.value = state.copy(
+            apps = apps,
+            stats = sample.stats,
+            cpuHistory = (state.cpuHistory + sample.stats.cpuPercent).takeLast(HISTORY_SIZE),
+            ramHistory = (state.ramHistory + sample.stats.ramPercent).takeLast(HISTORY_SIZE),
+            foregroundPackage = foreground ?: state.foregroundPackage,
+        )
     }
 
     // -------------------------------------------------------------- acțiuni
@@ -646,6 +765,17 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
 
     companion object {
         private const val REQUEST_CODE = 4711
+
+        /** Cadența eșantionării cât timp ecranul e vizibil. */
+        private const val TICK_MS = 2_000L
+
+        /** Câte eșantioane ține graficul (60 × 2 s = 2 minute). */
+        private const val HISTORY_SIZE = 60
+
+        /** La fiecare atâtea tick-uri se reîmprospătează și pachetul din prim-plan. */
+        private const val FOREGROUND_EVERY = 8
+
+        private const val KEY_LIVE = "live_stats"
 
         fun formatDate(millis: Long): String =
             SimpleDateFormat("dd.MM.yyyy HH:mm", Locale("ro", "RO")).format(Date(millis))
