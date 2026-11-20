@@ -444,9 +444,14 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
         val apps = state.apps.map { app ->
             val proc = sample.processes[app.uid]
             if (proc == null) {
-                app.copy(pids = emptyList(), rssKb = 0, cpuPercent = 0f)
+                app.copy(pids = emptyList(), rssKb = 0, cpuPercent = 0f, threadCount = 0)
             } else {
-                app.copy(pids = proc.pids, rssKb = proc.rssKb, cpuPercent = proc.cpuPercent)
+                app.copy(
+                    pids = proc.pids,
+                    rssKb = proc.rssKb,
+                    cpuPercent = proc.cpuPercent,
+                    threadCount = proc.threadCount,
+                )
             }
         }
 

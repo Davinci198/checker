@@ -25,6 +25,8 @@ data class AppEntry(
     val sharedUid: Boolean = false,
     /** CPU instantaneu al proceselor pachetului, în procente dintr-un nucleu. */
     val cpuPercent: Float = 0f,
+    /** Câte fire de execuție are pachetul acum, în toate procesele lui. */
+    val threadCount: Int = 0,
     val safety: StopSafety = StopSafety.SAFE,
     val safetyReason: String = "",
 ) {
@@ -59,6 +61,14 @@ data class AppEntry(
 
     /** Poate fi oprită fără să afecteze telefonul, cât timp rulează. */
     val safeToStop: Boolean get() = safety == StopSafety.SAFE
+
+    /** „12 fire” — numărul de fire din toate procesele aplicației. */
+    val threadsLabel: String = when {
+        threadCount <= 0 -> ""
+        threadCount == 1 -> "1 fir"
+        threadCount < 20 -> "$threadCount fire"
+        else -> "$threadCount de fire"
+    }
 
     companion object {
         fun formatKb(kb: Long): String = when {

@@ -9,6 +9,8 @@ data class UidProcesses(
     val rssKb: Long = 0,
     /** CPU instantaneu, în procente dintr-un nucleu (poate depăși 100 la mai multe fire). */
     val cpuPercent: Float = 0f,
+    /** Totalul firelor de execuție ale proceselor aplicației. */
+    val threadCount: Int = 0,
 ) {
     val processCount: Int get() = pids.size
 }
@@ -30,7 +32,9 @@ data class LiveSample(
  *  - `/proc/meminfo`   -> RAM și swap
  *  - `/proc/loadavg`   -> load average
  *  - `ps -A`           -> PID, UID, RSS
- *  - `/proc/<pid>/stat`-> timpul CPU cumulat pe proces (awk, o singură trecere)
+ *  - `/proc/<pid>/stat`-> timpul CPU cumulat și numărul de fire (awk, o singură trecere)
+ *  - zonele termice și clusterele cpufreq (dacă nucleul le expune)
+ *  - GPU (kgsl), doar pe nucleele care permit citirea din uid `shell`
  *
  * CPU-ul per proces e calculat din diferența de jiffies între eșantioane, nu din
  * media pe durata vieții procesului: altfel o aplicație care a consumat mult la
@@ -40,11 +44,13 @@ data class LiveSample(
 class LiveProbe {
 
     private var previousAt = 0L
-    private var previousJiffies: Map<Int, Long> = emptyMap()
+    private var previousJiffies: Map<Int, ProcStat> = emptyMap()
     private var previousCpu: CpuTimes? = null
 
     fun sample(shell: ShellBackend): LiveSample {
+        val startedAt = SystemClock.elapsedRealtime()
         val result = shell.exec(COMMAND, 15_000)
+        val sampleMillis = SystemClock.elapsedRealtime() - startedAt
         if (result.out.isBlank()) {
             return LiveSample(
                 error = "Nu pot citi starea sistemului: " +
@@ -81,6 +87,8 @@ class LiveProbe {
             hottestC = hottestC,
             hottestZone = hottestZone,
             clusters = parseClusters(blocks[FREQ] ?: ""),
+            gpu = parseGpu(blocks[GPU] ?: ""),
+            sampleMillis = sampleMillis,
         )
 
         val buckets = HashMap<Int, Bucket>()
@@ -101,10 +109,17 @@ class LiveProbe {
         val now = SystemClock.elapsedRealtime()
         val elapsedSeconds = (now - previousAt) / 1000.0
 
+        // Firele de execuție nu depind de eșantionul anterior: se pot lua din
+        // prima citire, ca aplicația să aibă numărul corect imediat.
+        jiffies.forEach { (pid, stat) ->
+            val uid = uidOfPid[pid] ?: return@forEach
+            buckets.getOrPut(uid) { Bucket() }.threads += stat.threads
+        }
+
         if (previousAt > 0 && elapsedSeconds >= MIN_WINDOW_SECONDS && jiffies.isNotEmpty()) {
-            jiffies.forEach { (pid, total) ->
+            jiffies.forEach { (pid, stat) ->
                 val before = previousJiffies[pid] ?: return@forEach
-                val used = total - before
+                val used = stat.jiffies - before.jiffies
                 if (used <= 0) return@forEach
                 val uid = uidOfPid[pid] ?: return@forEach
                 buckets.getOrPut(uid) { Bucket() }.cpuJiffies += used
@@ -123,6 +138,7 @@ class LiveProbe {
                 } else {
                     (bucket.cpuJiffies / HZ / elapsedSeconds * 100.0).toFloat()
                 },
+                threadCount = bucket.threads,
             )
         }
 
@@ -173,42 +189,99 @@ class LiveProbe {
     }
 
     /**
-     * Zonele termice: `tip|miligrade`. Unele drivere raportează zecimi de grad
-     * sau grade întregi, deci se normalizează după mărime.
+     * Zonele termice. Comanda le citește pe toate cu un singur `grep -H`, deci
+     * primele linii arată ca `/sys/class/thermal/thermal_zone0/temp:32100`.
+     * Unele drivere raportează miligrade, altele zecimi de grad sau grade
+     * întregi, deci valoarea se normalizează după mărime.
      */
     private fun parseThermal(block: String): Pair<Float, String> {
-        var hottest = 0f
-        var zone = ""
+        val names = HashMap<String, String>(8)
+        val temps = HashMap<String, Float>(8)
+
         block.lineSequence().forEach { line ->
-            val name = line.substringBefore('|').trim()
-            val raw = line.substringAfter('|', "").trim().toFloatOrNull() ?: return@forEach
-            val celsius = when {
-                raw >= 1_000f -> raw / 1_000f
-                raw >= 200f -> raw / 10f
-                else -> raw
-            }
-            if (celsius in 1f..150f && celsius > hottest) {
-                hottest = celsius
-                zone = name
+            val match = THERMAL_REGEX.find(line) ?: return@forEach
+            val zone = match.groupValues[1]
+            val value = match.groupValues[3].trim()
+            when (match.groupValues[2]) {
+                "type" -> names[zone] = value
+                "temp" -> {
+                    val raw = value.toFloatOrNull() ?: return@forEach
+                    temps[zone] = when {
+                        raw >= 1_000f -> raw / 1_000f
+                        raw >= 200f -> raw / 10f
+                        else -> raw
+                    }
+                }
             }
         }
-        return hottest to zone
+
+        var hottest = 0f
+        var zoneName = ""
+        temps.forEach { (zone, celsius) ->
+            if (celsius in 1f..150f && celsius > hottest) {
+                hottest = celsius
+                zoneName = names[zone].orEmpty().ifBlank { "zona $zone" }
+            }
+        }
+        return hottest to zoneName
     }
 
-    /** Clusterele cpufreq: `policy0|0,1,2,3|<curent kHz>|<max kHz>`. */
-    private fun parseClusters(block: String): List<CpuCluster> =
-        block.lineSequence().mapNotNull { line ->
-            val parts = line.split('|')
-            if (parts.size < 4) return@mapNotNull null
-            val policy = parts[0].trim().ifBlank { return@mapNotNull null }
-            val max = parts[3].trim().toIntOrNull() ?: 0
+    /**
+     * Clusterele cpufreq, tot dintr-un `grep -H`:
+     * `/sys/.../cpufreq/policy0/scaling_cur_freq:1804800`.
+     */
+    private fun parseClusters(block: String): List<CpuCluster> {
+        val current = HashMap<String, Int>(4)
+        val maximum = HashMap<String, Int>(4)
+        val cpus = HashMap<String, String>(4)
+
+        block.lineSequence().forEach { line ->
+            val match = FREQ_REGEX.find(line) ?: return@forEach
+            val policy = match.groupValues[1]
+            val value = match.groupValues[3].trim()
+            when (match.groupValues[2]) {
+                "scaling_cur_freq" -> current[policy] = (value.toIntOrNull() ?: 0) / 1_000
+                "cpuinfo_max_freq" -> maximum[policy] = (value.toIntOrNull() ?: 0) / 1_000
+                "related_cpus" -> cpus[policy] = value.split(WHITESPACE).joinToString(",")
+            }
+        }
+
+        return current.keys.sorted().map { policy ->
             CpuCluster(
                 policy = policy,
-                cpus = parts[1].trim(),
-                currentMhz = (parts[2].trim().toIntOrNull() ?: 0) / 1_000,
-                maxMhz = max / 1_000,
+                cpus = cpus[policy].orEmpty(),
+                currentMhz = current[policy] ?: 0,
+                maxMhz = maximum[policy] ?: 0,
             )
-        }.toList().sortedBy { it.policy }
+        }
+    }
+
+    /** GPU: `gpubusy=<ocupat> <total>` sau `pct=<procent>` plus frecvențele. */
+    private fun parseGpu(block: String): GpuStats? {
+        var percent: Float? = null
+        var curMhz = 0
+        var maxMhz = 0
+        block.lineSequence().forEach { line ->
+            val key = line.substringBefore('=').trim()
+            val value = line.substringAfter('=', "").trim()
+            when (key) {
+                "gpubusy" -> {
+                    val parts = value.split(WHITESPACE).mapNotNull { it.toLongOrNull() }
+                    if (parts.size == 2 && parts[1] > 0) {
+                        percent = (parts[0] * 100f / parts[1]).coerceIn(0f, 100f)
+                    }
+                }
+                "pct" -> {
+                    val raw = value.toFloatOrNull()
+                    if (raw != null) percent = raw.coerceIn(0f, 100f)
+                }
+                "cur" -> curMhz = (value.toIntOrNull() ?: 0) / 1_000_000
+                "max" -> maxMhz = (value.toIntOrNull() ?: 0) / 1_000_000
+            }
+        }
+        if (percent == null && curMhz == 0) return null
+        return GpuStats(percent = percent ?: 0f, currentMhz = curMhz, maxMhz = maxMhz)
+    }
 
     private fun memKb(block: String, key: String): Long =
         block.lineSequence()
@@ -219,17 +292,20 @@ class LiveProbe {
             ?.toLongOrNull()
             ?: 0L
 
-    private fun parseJiffies(block: String): Map<Int, Long> {
+    private fun parseJiffies(block: String): Map<Int, ProcStat> {
         if (block.isBlank()) return emptyMap()
-        val map = HashMap<Int, Long>(512)
+        val map = HashMap<Int, ProcStat>(512)
         block.lineSequence().forEach { line ->
             val match = JIFFIES_REGEX.find(line) ?: return@forEach
             val pid = match.groupValues[1].toIntOrNull() ?: return@forEach
             val jiffies = match.groupValues[2].toLongOrNull() ?: return@forEach
-            map[pid] = jiffies
+            val threads = match.groupValues[3].toIntOrNull() ?: 0
+            map[pid] = ProcStat(jiffies, threads)
         }
         return map
     }
+
+    private data class ProcStat(val jiffies: Long, val threads: Int)
 
     private data class CpuTimes(val total: Long, val idle: Long)
 
@@ -237,6 +313,7 @@ class LiveProbe {
         val pids = ArrayList<Int>(2)
         var rssKb = 0L
         var cpuJiffies = 0L
+        var threads = 0
     }
 
     companion object {
@@ -253,13 +330,22 @@ class LiveProbe {
         private const val JIFF = "@@CHECKER_JIFF"
         private const val THERM = "@@CHECKER_THERM"
         private const val FREQ = "@@CHECKER_FREQ"
+        private const val GPU = "@@CHECKER_GPU"
 
-        private val MARKERS = setOf(STAT, MEM, LOAD, PROC, JIFF, THERM, FREQ)
+        private val MARKERS = setOf(STAT, MEM, LOAD, PROC, JIFF, THERM, FREQ, GPU)
 
         private val PS_REGEX = Regex("""^\s*(\d+)\s+(\d+)\s+(\d+)\s*$""")
-        private val JIFFIES_REGEX = Regex("""^\s*(\d+)\s+(\d+)\s*$""")
+
+        /** `pid <jiffies> <fire>`; vezi awk-ul din [COMMAND]. */
+        private val JIFFIES_REGEX = Regex("""^\s*(\d+)\s+(\d+)\s+(\d+)\s*$""")
         private val CORE_REGEX = Regex("""^cpu\d+$""")
         private val WHITESPACE = Regex("""\s+""")
+
+        /** `.../thermal_zone12/temp:38000` -> zona 12, tipul `temp`, valoarea. */
+        private val THERMAL_REGEX = Regex("""thermal_zone(\d+)/(temp|type):(.*)$""")
+
+        /** `.../cpufreq/policy0/scaling_cur_freq:1804800`. */
+        private val FREQ_REGEX = Regex("""cpufreq/(policy\d+)/(\w+):(.*)$""")
 
         private val COMMAND = buildString {
             append("echo $STAT; cat /proc/stat; ")
@@ -267,14 +353,29 @@ class LiveProbe {
             append("echo $LOAD; cat /proc/loadavg; ")
             append("echo $PROC; ps -A -o PID,UID,RSS; ")
             append("echo $JIFF; ")
-            append("awk '{split(FILENAME,a,\"/\"); print a[3], \$14+\$15}' /proc/[0-9]*/stat; ")
+            // `sub(/^.*\)/,"")` taie „pid (comm)" până la ultima paranteză, ca
+            // numele cu spații („Web Content") să nu decaleze câmpurile.
+            // b[12]+b[13] = utime+stime, b[18] = numărul de fire.
+            append("awk '{split(FILENAME,a,\"/\"); l=\$0; sub(/^.*\\)/,\"\",l); ")
+            append("n=split(l,b,\" \"); print a[3], b[12]+b[13], b[18]}' /proc/[0-9]*/stat; ")
             append("echo $THERM; ")
-            append("for z in /sys/class/thermal/thermal_zone*; do ")
-            append("echo \"\$(cat \$z/type 2>/dev/null)|\$(cat \$z/temp 2>/dev/null)\"; done; ")
+            append("grep -H . /sys/class/thermal/thermal_zone*/temp ")
+            append("/sys/class/thermal/thermal_zone*/type 2>/dev/null; ")
             append("echo $FREQ; ")
-            append("for p in /sys/devices/system/cpu/cpufreq/policy*; do ")
-            append("echo \"\${p##*/}|\$(cat \$p/related_cpus 2>/dev/null | tr ' ' ',')|")
-            append("\$(cat \$p/scaling_cur_freq 2>/dev/null)|\$(cat \$p/cpuinfo_max_freq 2>/dev/null)\"; done")
+            append("grep -H . /sys/devices/system/cpu/cpufreq/policy*/scaling_cur_freq ")
+            append("/sys/devices/system/cpu/cpufreq/policy*/cpuinfo_max_freq ")
+            append("/sys/devices/system/cpu/cpufreq/policy*/related_cpus 2>/dev/null; ")
+            // GPU: pe multe nuclee /sys/class/kgsl e permis doar root-ului, deci
+            // fiecare citire e condiționată; dacă nimic nu răspunde, blocul e gol
+            // și GPU-ul pur și simplu nu apare în interfață.
+            append("echo $GPU; ")
+            append("for pair in gpubusy:gpubusy gpu_busy_percentage:pct; do ")
+            append("v=\$(cat /sys/class/kgsl/kgsl-3d0/\${pair%%:*} 2>/dev/null); ")
+            append("[ -n \"\$v\" ] && echo \"\${pair##*:}=\$v\"; done; ")
+            append("v=\$(cat /sys/class/kgsl/kgsl-3d0/devfreq/cur_freq 2>/dev/null); ")
+            append("[ -n \"\$v\" ] && echo \"cur=\$v\"; ")
+            append("v=\$(cat /sys/class/kgsl/kgsl-3d0/devfreq/max_freq 2>/dev/null); ")
+            append("[ -n \"\$v\" ] && echo \"max=\$v\"; true")
         }
     }
 }
