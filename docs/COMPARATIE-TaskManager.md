@@ -261,6 +261,9 @@ Doar dacă apare nevoia de eșantionare sub 1 s sau de procese linux complete.
 Atunci: `libcheckerd.so` minimal (JSON prin pipe), pornit prin Shizuku, cu
 aceleași comenzi ca `ShellBackend`. Nu înainte de Faza 1–3.
 
+**Decizie (2026-11-20): nu se face.** Vezi „Faza 4 — daemon: decizia de a nu-l
+face” în secțiunea de stadiu.
+
 ---
 
 ## 8. Verificări făcute pe device (moto g57 power, Android 16)
@@ -296,9 +299,10 @@ care Checker îl are deja.** Daemonul lor e o optimizare, nu o necesitate.
   (`ON_START`/`ON_STOP`), ca să nu consume baterie în fundal.
 
 Diferență față de plan: numărul de fire per proces (`THREADS`) nu e disponibil
-în `ps`-ul de pe Android 16 (`ps: bad -o 'PID,THREADS'`), iar citirea
-`/proc/<pid>/status` pentru fiecare PID ar dubla costul eșantionului. Se poate
-adăuga mai târziu, doar pentru aplicația deschisă în detaliu.
+în `ps`-ul de pe Android 16 (`ps: bad -o 'PID,THREADS'`). S-a rezolvat în același
+`awk` care citește jiffies: câmpul 20 din `/proc/<pid>/stat` (numărul de fire)
+vine în aceeași trecere, fără un al doilea apel. Vezi „Extra — GPU, fire,
+paznic CPU” mai jos.
 
 ### Faza 2 — debloat UAD (de făcut)
 
@@ -349,3 +353,51 @@ TaskManager (Apache 2.0). Atribuirea e în README; codul aplicației nu
 Nu s-a adăugat citirea temperaturii bateriei separat: zonele termice acoperă
 aceeași informație, iar `BatteryManager` ar însemna încă un receiver sticky la
 fiecare eșantion.
+
+### Extra — GPU, fire, paznic CPU (implementate)
+
+- **Fire de execuție per aplicație.** Numărul de fire vine din câmpul 20 al
+  `/proc/<pid>/stat`, citit de același `awk` care adună jiffies — zero cost în
+  plus. Se afișează în fișa aplicației („Fire de execuție: 27”).
+- **Sarcina GPU.** `LiveProbe` citește `gpubusy` / `gpu_busy_percentage` și
+  frecvența GPU în același eșantion. Pe Android 16 SELinux nu lasă nici uid-ul
+  `shell` să citească `/sys/class/kgsl` (verificat pe moto g57 power:
+  `Permission denied` chiar și pe `devfreq`), deci pe acest telefon blocul vine
+  gol și rândul „GPU” nu apare deloc. Nu se afișează valori inventate: dacă
+  nucleul permite citirea (unele drivere expun `gpubusy` cu 644), rândul apare.
+- **Paznic CPU în fundal.** Serviciu în prim-plan (tip `specialUse`) care citește
+  un eșantion la 45 s și anunță aplicațiile de utilizator ce trec de 25% dintr-un
+  nucleu două eșantioane la rând (90 s), deși nu sunt pe ecran. Lista albă e
+  respectată, procesele de sistem (uid < 10 000) sunt ignorate, iar același
+  pachet nu e anunțat mai des de 20 de minute. UID → pachet se ia din
+  `cmd package list packages -U` (30 ms) și se ține 10 minute.
+
+**Reparație de performanță găsită pe drum:** bucla termică din Faza 3 pornea
+280 de procese `cat` (140 de zone × `type`/`temp`) și lua **5,3 s** per eșantion.
+Înlocuită cu un singur `grep -H`, eșantionul complet a coborât la **0,6 s**.
+Cardul arată durata citirii când trece de 1,5 s, ca o asemenea regresie să se
+vadă din interfață.
+
+### Faza 4 — daemon: decizia de a nu-l face
+
+Daemonul nativ din TaskManager (`libtaskmanagerd.so`, pornit prin Shizuku) e o
+optimizare, nu o funcție: aceleași date se citesc prin shell. La Checker,
+argumentele pentru a nu-l construi:
+
+1. **Nu mai există nevoie de viteză.** Un eșantion complet (CPU total, RAM,
+   swap, load, `ps` cu ~900 procese, jiffies + fire pentru fiecare PID,
+   140 de zone termice, frecvențe, GPU) durează 0,6 s prin shell. Ținta era sub
+   1 s; e atinsă fără cod nativ.
+2. **Ce ar câștiga un daemon e blocat de SELinux, nu de privilegii.** GPU-ul
+   nu poate fi citit nici cu uid `shell` pe Android 16; un daemon pornit prin
+   Shizuku rulează tot ca `shell`, deci ar primi exact aceeași eroare. Pentru
+   GPU ar fi nevoie de root, iar root nu e suportat.
+3. **Cost de întreținere.** Un `.so` înseamnă NDK în CI, ABI-uri multiple,
+   semnături, un protocol propriu prin pipe și încă un loc în care pot apărea
+   scurgeri de memorie — pentru zero funcții noi.
+4. **Acțiunile trec tot prin `am`/`pm`.** Oprirea forțată, înghețarea și
+   dezinstalarea se fac prin comenzile Android; un daemon ar fi un strat în plus
+   peste aceleași comenzi.
+
+Condiția care ar schimba decizia: eșantionare sub 200 ms, sau citirea unor
+procese de kernel care nu apar în `ps` de shell. Niciuna nu e cerută acum.
