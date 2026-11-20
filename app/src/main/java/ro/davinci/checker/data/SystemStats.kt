@@ -18,6 +18,15 @@ data class CpuCluster(
     val maxMhz: Int,
 )
 
+/** Sarcina GPU-ului, dacă nucleul permite citirea din uid `shell`. */
+data class GpuStats(
+    val percent: Float = 0f,
+    val currentMhz: Int = 0,
+    val maxMhz: Int = 0,
+) {
+    val percentLabel: String get() = "%.0f%%".format(Locale.ROOT, percent)
+}
+
 data class SystemStats(
     val cpuPercent: Float = 0f,
     val ramUsedKb: Long = 0,
@@ -31,6 +40,10 @@ data class SystemStats(
     /** Numele zonei celei mai calde, ex. `cpu-0-2`. */
     val hottestZone: String = "",
     val clusters: List<CpuCluster> = emptyList(),
+    /** `null` când nucleul nu lasă uid-ul `shell` să citească starea GPU-ului. */
+    val gpu: GpuStats? = null,
+    /** Cât a durat citirea întregului eșantion, în milisecunde. */
+    val sampleMillis: Long = 0,
 ) {
     val ramPercent: Float get() = percent(ramUsedKb, ramTotalKb)
     val swapPercent: Float get() = percent(swapUsedKb, swapTotalKb)
@@ -65,6 +78,17 @@ data class SystemStats(
     val swapLabel: String get() = "${AppEntry.formatKb(swapUsedKb)} / ${AppEntry.formatKb(swapTotalKb)}"
 
     val loadLabel: String get() = "%.2f".format(load1)
+
+    /**
+     * Sarcina GPU, gata de afișat: „42% · 680 MHz”. `null` înseamnă că nucleul
+     * nu expune citirea (SELinux), caz în care rândul lipsește cu totul.
+     */
+    val gpuLabel: String?
+        get() {
+            val stats = gpu ?: return null
+            val freq = if (stats.currentMhz > 0) " · ${stats.currentMhz} MHz" else ""
+            return stats.percentLabel + freq
+        }
 
     companion object {
         val EMPTY = SystemStats()

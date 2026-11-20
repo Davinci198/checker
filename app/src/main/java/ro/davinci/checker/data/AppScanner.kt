@@ -94,6 +94,7 @@ class AppScanner(private val context: Context) {
                 pids = proc?.pids ?: emptyList(),
                 rssKb = proc?.rssKb ?: 0,
                 cpuPercent = proc?.cpuPercent ?: 0f,
+                threadCount = proc?.threadCount ?: 0,
                 installedAt = info.firstInstallTime,
                 targetSdk = appInfo.targetSdkVersion,
                 minSdk = appInfo.minSdkVersion,

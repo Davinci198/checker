@@ -622,6 +622,29 @@ private fun StatsCard(
                     )
                 }
             }
+
+            // GPU-ul apare doar dacă nucleul permite citirea din uid `shell`.
+            // Pe Android 16 SELinux închide /sys/class/kgsl și pentru shell,
+            // deci rândul lipsește — nu e o eroare, ci o limitare a telefonului.
+            stats.gpuLabel?.let { gpu ->
+                Text(
+                    text = "GPU $gpu",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+
+            // O citire peste 1,5 s înseamnă că vreun `/proc` sau `/sys` răspunde
+            // greu; merită semnalat, pentru că întârzie tot eșantionul.
+            if (stats.sampleMillis >= 1_500L) {
+                Text(
+                    text = "citirea a durat ${"%.1f".format(stats.sampleMillis / 1000f)} s",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = CheckerAmber,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
         }
     }
 }
@@ -1089,6 +1112,9 @@ private fun AppDetailSheet(
             KeyValueRow("Versiune", app.versionName)
             KeyValueRow("Procese", if (app.pids.isEmpty()) "—" else app.pids.joinToString(", "))
             KeyValueRow("CPU", if (app.cpuPercent >= 0.1f) app.cpuLabel else "—")
+            if (app.threadCount > 0) {
+                KeyValueRow("Fire de execuție", app.threadsLabel)
+            }
             KeyValueRow("Memorie", if (app.rssKb > 0) app.memoryLabel else "—")
             KeyValueRow("Fișiere APK", app.apkPaths.size.toString())
             KeyValueRow("SDK", if (app.targetSdk > 0) "${app.targetSdk} (min ${app.minSdk})" else "—")
