@@ -302,7 +302,20 @@ adăuga mai târziu, doar pentru aplicația deschisă în detaliu.
 
 ### Faza 2 — debloat UAD (de făcut)
 
-### Faza 3 — SoC/temperaturi (de făcut)
+### Faza 3 — SoC/temperaturi (implementată)
+
+- `SystemStats` a primit `hottestC`, `hottestZone` și `clusters`.
+- `LiveProbe` citește, în același apel, `/sys/class/thermal/thermal_zone*` și
+  `/sys/devices/system/cpu/cpufreq/policy*`; temperaturile în miligrade sunt
+  normalizate (unele drivere raportează zecimi de grad).
+- Cardul arată SoC-ul (`Build.SOC_MODEL`, sau șasiul sub Android 12),
+  temperatura zonei celei mai calde și plafonul de frecvență.
+- Peste 50 °C textul devine chihlimbar, peste 60 °C roșu, cu avertismentul că
+  telefonul frânează termic.
+
+Nu s-a adăugat citirea temperaturii bateriei separat: zonele termice acoperă
+aceeași informație, iar `BatteryManager` ar însemna încă un receiver sticky la
+fiecare eșantion.
 
 ### Faza 2 — debloat UAD (implementată)
 
@@ -322,4 +335,17 @@ Licență: datele provin din Universal Android Debloater (GPL-3.0), prin
 TaskManager (Apache 2.0). Atribuirea e în README; codul aplicației nu
 încorporează cod GPL.
 
-### Faza 3 — SoC/temperaturi (de făcut)
+### Faza 3 — SoC/temperaturi (implementată)
+
+- `SystemStats` a primit `hottestC`, `hottestZone` și `clusters`.
+- `LiveProbe` citește, în același apel, `/sys/class/thermal/thermal_zone*` și
+  `/sys/devices/system/cpu/cpufreq/policy*`; temperaturile în miligrade sunt
+  normalizate (unele drivere raportează zecimi de grad).
+- Cardul arată SoC-ul (`Build.SOC_MODEL`, sau șasiul sub Android 12),
+  temperatura zonei celei mai calde și plafonul de frecvență.
+- Peste 50 °C textul devine chihlimbar, peste 60 °C roșu, cu avertismentul că
+  telefonul frânează termic.
+
+Nu s-a adăugat citirea temperaturii bateriei separat: zonele termice acoperă
+aceeași informație, iar `BatteryManager` ar însemna încă un receiver sticky la
+fiecare eșantion.
