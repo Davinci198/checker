@@ -42,6 +42,8 @@ data class SystemStats(
     val clusters: List<CpuCluster> = emptyList(),
     /** `null` când nucleul nu lasă uid-ul `shell` să citească starea GPU-ului. */
     val gpu: GpuStats? = null,
+    /** Bateria: procent, capacitate din fabrică, orele încărcării. */
+    val battery: BatteryStats? = null,
     /** Cât a durat citirea întregului eșantion, în milisecunde. */
     val sampleMillis: Long = 0,
 ) {

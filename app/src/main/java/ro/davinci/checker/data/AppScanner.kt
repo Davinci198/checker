@@ -26,6 +26,7 @@ class AppScanner(private val context: Context) {
     private val pm: PackageManager = context.packageManager
     private val safetyAdvisor = SafetyAdvisor(context)
     private val probe = LiveProbe()
+    private val batteryLog = BatteryLog(context)
 
     private val foregroundRegex =
         Regex("""([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+)/[A-Za-z0-9_.$]+""")
@@ -50,6 +51,9 @@ class AppScanner(private val context: Context) {
         } else {
             LiveSample()
         }
+        // Orele încărcării vin din istoricul sistemului, ca să fie exacte și
+        // când aplicația nu rula la momentul băgatului în priză.
+        if (shell != null) runCatching { batteryLog.seedFrom(shell) }
         val running = live.processes
 
         val foreground = if (shell != null && live.error == null) {
@@ -127,6 +131,7 @@ class AppScanner(private val context: Context) {
             foregroundPackage = foreground,
             shellKind = shell?.kind?.name,
             warning = warning?.takeIf { it.isNotBlank() },
+            stats = live.stats.copy(battery = batteryLog.update(live.stats.battery)),
         )
     }
 

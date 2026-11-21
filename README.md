@@ -22,6 +22,14 @@ instalate pe telefon. Interfața este integral în română.
   închide `/sys/class/kgsl`, deci rândul lipsește.
 - **Fire de execuție** pentru fiecare aplicație, în fișă; cardul arată și cât a
   durat citirea, când trece de 1,5 s.
+- **Baterie**: procentul și starea de acum, capacitatea din fabrică (mAh de
+  proiectare) lângă capacitatea reală și uzura rezultată, numărul de cicluri,
+  curentul și temperatura. Pentru încărcare arată **ora la care a început**,
+  **procentul de la care a pornit** și **cât a durat**; pentru descărcare, ora
+  și **procentul de la care a început** (100, 99, 98…). Orele vin din istoricul
+  de baterie al sistemului (`dumpsys batterystats --history`), deci sunt exacte
+  și dacă aplicația nu rula când ai băgat sau scos încărcătorul; ce nu apare în
+  istoric se completează din eșantioanele proprii.
 - **Paznic CPU în fundal**: un comutator pornește un serviciu în prim-plan care
   citește consumul la 45 s și anunță aplicațiile ce trec de 25% dintr-un nucleu
   două eșantioane la rând (90 s), deși nu sunt pe ecran. Lista albă e respectată,
@@ -223,6 +231,12 @@ GitHub Release `v<versionName>` cu APK-ul atașat. Secrete necesare:
   shell. Fără shell trei eșantioane la rând, serviciul se oprește și spune de ce.
   Monitorizează doar aplicațiile de utilizator (uid ≥ 10 000), nu procesele de
   sistem.
+- **Istoricul de baterie** (`dumpsys batterystats --history`) e un tampon
+  circular — pe acest telefon ține cam o săptămână — și poate fi dezactivat pe
+  unele telefoane. În plus, liniile lui nu conțin anul: anul se deduce din data
+  curentă, iar un eveniment din viitor e mutat în anul trecut. Ce nu se găsește
+  în istoric e completat de prima eșantionare care vede schimbarea, cu precizia
+  de 2 s cât timp aplicația e deschisă, respectiv 45 s cu paznicul CPU pornit.
 ## Credite și licențe
 
 - Ideea de a citi CPU pe proces din `/proc/<pid>/stat` și structura bazei de

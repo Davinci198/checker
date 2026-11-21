@@ -21,6 +21,7 @@ import ro.davinci.checker.data.AppActions
 import ro.davinci.checker.data.AppEntry
 import ro.davinci.checker.data.AppLists
 import ro.davinci.checker.data.AppScanner
+import ro.davinci.checker.data.BatteryLog
 import ro.davinci.checker.data.BloatInfo
 import ro.davinci.checker.data.BloatVerdict
 import ro.davinci.checker.data.DebloatDb
@@ -204,6 +205,7 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
     private val backupStore = ApkBackup(application)
     private val lists = AppLists(application)
     private val debloatDb = DebloatDb(application)
+    private val batteryLog = BatteryLog(application)
     private val prefs = application.getSharedPreferences("checker_prefs", Context.MODE_PRIVATE)
 
     private var liveJob: Job? = null
@@ -471,9 +473,13 @@ class CheckerViewModel(application: Application) : AndroidViewModel(application)
             }
         }
 
+        val stats = sample.stats.copy(
+            battery = withContext(Dispatchers.IO) { batteryLog.update(sample.stats.battery) },
+        )
+
         _ui.value = state.copy(
             apps = apps,
-            stats = sample.stats,
+            stats = stats,
             cpuHistory = (state.cpuHistory + sample.stats.cpuPercent).takeLast(HISTORY_SIZE),
             ramHistory = (state.ramHistory + sample.stats.ramPercent).takeLast(HISTORY_SIZE),
             foregroundPackage = foreground ?: state.foregroundPackage,
