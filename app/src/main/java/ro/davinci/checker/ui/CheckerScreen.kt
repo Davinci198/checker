@@ -17,6 +17,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -90,7 +91,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -125,6 +125,8 @@ fun CheckerApp(vm: CheckerViewModel) {
 
     var showBackups by rememberSaveable { mutableStateOf(false) }
     var showConnection by rememberSaveable { mutableStateOf(false) }
+    var showDetails by rememberSaveable { mutableStateOf(false) }
+    var showCategories by rememberSaveable { mutableStateOf(false) }
     var selectedPackage by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingUninstall by rememberSaveable { mutableStateOf<String?>(null) }
     var backupBeforeUninstall by rememberSaveable { mutableStateOf(true) }
@@ -256,17 +258,25 @@ fun CheckerApp(vm: CheckerViewModel) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
 
+            // Monitorul e compact implicit ca să lase lista de aplicații
+            // vizibilă; detaliile se deschid la tap pe „Detalii”.
             if (ui.connected && ui.stats.ramTotalKb > 0) {
-                StatsCard(
+                OverviewBar(
                     ui = ui,
-                    onToggleLive = vm::setLiveEnabled,
-                    onToggleCpuWatch = vm::setCpuWatch,
-                    onShowHot = { vm.setFilter(AppFilter.HOT) },
+                    expanded = showDetails,
+                    onToggle = { showDetails = !showDetails },
                 )
-            }
-
-            ui.stats.battery?.takeIf { it.valid }?.let { battery ->
-                BatteryCard(battery)
+                if (showDetails) {
+                    StatsCard(
+                        ui = ui,
+                        onToggleLive = vm::setLiveEnabled,
+                        onToggleCpuWatch = vm::setCpuWatch,
+                        onShowHot = { vm.setFilter(AppFilter.HOT) },
+                    )
+                    ui.stats.battery?.takeIf { it.valid }?.let { battery ->
+                        BatteryCard(battery)
+                    }
+                }
             }
 
             OutlinedTextField(
@@ -286,22 +296,12 @@ fun CheckerApp(vm: CheckerViewModel) {
                 shape = RoundedCornerShape(18.dp),
             )
 
-            LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                items(AppFilter.entries.toList()) { filter ->
-                    FilterChip(
-                        selected = ui.filter == filter,
-                        onClick = { vm.setFilter(filter) },
-                        label = { Text("${filter.label} (${ui.count(filter)})") },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                        ),
-                    )
-                }
-            }
+            CategoryBar(
+                ui = ui,
+                expanded = showCategories,
+                onToggle = { showCategories = !showCategories },
+                onSelect = vm::setFilter,
+            )
 
             SortRow(ui = ui, onSort = vm::setSort)
 
@@ -320,7 +320,7 @@ fun CheckerApp(vm: CheckerViewModel) {
                         "și fără rol critic (lansator, tastatură, telefon, SMS).",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
 
@@ -334,7 +334,7 @@ fun CheckerApp(vm: CheckerViewModel) {
                         "pe toate dintr-un singur tap.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
 
@@ -344,7 +344,7 @@ fun CheckerApp(vm: CheckerViewModel) {
                         "verde = poate fi eliminat, roșu = nu. Listează doar ce e instalat acum.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
 
@@ -526,6 +526,162 @@ fun CheckerApp(vm: CheckerViewModel) {
                 showConnection = false
                 vm.requestShizukuPermission()
             },
+        )
+    }
+}
+
+/**
+ * Categoriile sunt închise implicit: se vede doar categoria activă și un
+ * buton care deschide grila completă. Astfel lista de aplicații rămâne
+ * vizibilă, iar chip-urile nu mai ocupă 4 rânduri permanente.
+ */
+@Composable
+private fun CategoryBar(
+    ui: UiState,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    onSelect: (AppFilter) -> Unit,
+) {
+    val shape = RoundedCornerShape(16.dp)
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .background(Premium.Surface, shape)
+                .border(1.dp, Premium.Border, shape)
+                .padding(horizontal = 14.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "Categorii",
+                style = MaterialTheme.typography.labelSmall,
+                color = Premium.Muted,
+                modifier = Modifier.weight(1f),
+            )
+            TextButton(onClick = onToggle, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                Text(
+                    text = if (expanded) {
+                        "Ascunde ▴"
+                    } else {
+                        "${ui.filter.label} (${ui.count(ui.filter)}) ▾"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+        }
+        if (expanded) {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                AppFilter.entries.forEach { filter ->
+                    FilterChip(
+                        selected = ui.filter == filter,
+                        onClick = { onSelect(filter) },
+                        label = {
+                            Text(
+                                "${filter.label} (${ui.count(filter)})",
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                        },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Bară compactă, afișată implicit: arată doar cifrele cheie și lasă lista de
+ * aplicații să ocupe ecranul. Butonul „Detalii” deschide cardurile complete.
+ */
+@Composable
+private fun OverviewBar(ui: UiState, expanded: Boolean, onToggle: () -> Unit) {
+    val stats = ui.stats
+    val battery = stats.battery?.takeIf { it.valid }
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp).premiumCard(),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        shape = Premium.Shape,
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                CompactMetric(
+                    label = "CPU",
+                    value = stats.cpuLabel,
+                    color = CheckerAmber,
+                    modifier = Modifier.weight(1f),
+                )
+                CompactMetric(
+                    label = "RAM",
+                    value = "${"%.0f".format(stats.ramPercent)}%",
+                    color = CheckerBlue,
+                    modifier = Modifier.weight(1f),
+                )
+                if (battery != null) {
+                    CompactMetric(
+                        label = "Baterie",
+                        value = "${battery.percent}%",
+                        color = Premium.Green,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                TextButton(onClick = onToggle, contentPadding = PaddingValues(horizontal = 6.dp)) {
+                    Text(
+                        text = if (expanded) "Mai puțin" else "Detalii",
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+            if (battery != null) {
+                Spacer(Modifier.height(10.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(Color.White.copy(alpha = 0.08f)),
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth(battery.percent.coerceIn(0, 100) / 100f)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(50))
+                            .background(
+                                Brush.horizontalGradient(listOf(Premium.Green, Color(0xFFFACC15))),
+                            ),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompactMetric(
+    label: String,
+    value: String,
+    color: Color,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = Premium.Muted,
+        )
+        GradientText(
+            text = value,
+            style = MaterialTheme.typography.titleMedium,
+            colors = listOf(color.copy(alpha = 0.72f), color),
         )
     }
 }
@@ -1156,7 +1312,6 @@ private fun AppRow(
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .shadow(6.dp, Premium.Shape)
             .background(Premium.Surface, Premium.Shape)
             .background(
                 if (selected) Premium.Blue.copy(alpha = 0.16f) else Color.Transparent,
