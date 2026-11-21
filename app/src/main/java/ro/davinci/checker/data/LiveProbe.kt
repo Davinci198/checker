@@ -88,6 +88,7 @@ class LiveProbe {
             hottestZone = hottestZone,
             clusters = parseClusters(blocks[FREQ] ?: ""),
             gpu = parseGpu(blocks[GPU] ?: ""),
+            battery = parseBattery(blocks[BATT] ?: ""),
             sampleMillis = sampleMillis,
         )
 
@@ -283,6 +284,59 @@ class LiveProbe {
         return GpuStats(percent = percent ?: 0f, currentMhz = curMhz, maxMhz = maxMhz)
     }
 
+    /**
+     * Bateria. Liniile arată ca
+     * `/sys/class/power_supply/battery/capacity:21`.
+     *
+     * Unele telefoane (Motorola) au două noduri — `battery` și `mmi_battery` —
+     * care nu cad mereu de acord; se dă prioritate lui `battery`, pentru că de
+     * el ascultă și sistemul când afișează procentul.
+     */
+    private fun parseBattery(block: String): BatteryStats? {
+        if (block.isBlank()) return null
+        val byNode = HashMap<String, MutableMap<String, String>>(2)
+
+        block.lineSequence().forEach { line ->
+            val match = BATTERY_REGEX.find(line) ?: return@forEach
+            val node = match.groupValues[1]
+            val key = match.groupValues[2]
+            val value = match.groupValues[3].trim()
+            byNode.getOrPut(node) { HashMap(12) }[key] = value
+        }
+
+        val node = byNode["battery"] ?: byNode["mmi_battery"] ?: return null
+        val percent = node["capacity"]?.toIntOrNull() ?: return null
+        if (percent !in 0..100) return null
+
+        // Kernelul raportează capacitatea în µAh și curentul în µA, dar unele
+        // drivere dau direct mAh/mA; pragul desparte cele două convenții.
+        fun milli(raw: String?): Int {
+            val value = raw?.toIntOrNull() ?: return 0
+            return if (kotlin.math.abs(value) > 100_000) value / 1_000 else value
+        }
+
+        val temperature = node["temp"]?.toFloatOrNull()?.let {
+            if (it >= 200f) it / 10f else it
+        } ?: 0f
+
+        return BatteryStats(
+            percent = percent,
+            status = when (node["status"]?.lowercase()) {
+                "charging" -> BatteryStats.Status.CHARGING
+                "discharging" -> BatteryStats.Status.DISCHARGING
+                "full" -> BatteryStats.Status.FULL
+                "not charging" -> BatteryStats.Status.NOT_CHARGING
+                else -> BatteryStats.Status.UNKNOWN
+            },
+            designMah = milli(node["charge_full_design"]),
+            fullMah = milli(node["charge_full"]),
+            currentMa = milli(node["current_now"]),
+            tempC = temperature,
+            cycles = node["cycle_count"]?.toIntOrNull() ?: 0,
+            health = node["health"].orEmpty(),
+        )
+    }
+
     private fun memKb(block: String, key: String): Long =
         block.lineSequence()
             .firstOrNull { it.startsWith("$key:") }
@@ -331,8 +385,9 @@ class LiveProbe {
         private const val THERM = "@@CHECKER_THERM"
         private const val FREQ = "@@CHECKER_FREQ"
         private const val GPU = "@@CHECKER_GPU"
+        private const val BATT = "@@CHECKER_BATT"
 
-        private val MARKERS = setOf(STAT, MEM, LOAD, PROC, JIFF, THERM, FREQ, GPU)
+        private val MARKERS = setOf(STAT, MEM, LOAD, PROC, JIFF, THERM, FREQ, GPU, BATT)
 
         private val PS_REGEX = Regex("""^\s*(\d+)\s+(\d+)\s+(\d+)\s*$""")
 
@@ -346,6 +401,15 @@ class LiveProbe {
 
         /** `.../cpufreq/policy0/scaling_cur_freq:1804800`. */
         private val FREQ_REGEX = Regex("""cpufreq/(policy\d+)/(\w+):(.*)$""")
+
+        /** `.../power_supply/battery/capacity:21`. */
+        private val BATTERY_REGEX = Regex("""power_supply/(\w+)/(\w+):(.*)$""")
+
+        /** Câmpurile citite din baterie; ordinea nu contează pentru parsare. */
+        private val BATTERY_FIELDS = listOf(
+            "status", "capacity", "charge_full_design", "charge_full",
+            "current_now", "temp", "cycle_count", "health",
+        )
 
         private val COMMAND = buildString {
             append("echo $STAT; cat /proc/stat; ")
@@ -375,7 +439,17 @@ class LiveProbe {
             append("v=\$(cat /sys/class/kgsl/kgsl-3d0/devfreq/cur_freq 2>/dev/null); ")
             append("[ -n \"\$v\" ] && echo \"cur=\$v\"; ")
             append("v=\$(cat /sys/class/kgsl/kgsl-3d0/devfreq/max_freq 2>/dev/null); ")
-            append("[ -n \"\$v\" ] && echo \"max=\$v\"; true")
+            append("[ -n \"\$v\" ] && echo \"max=\$v\"; ")
+            // Bateria: două `grep` (nu 18 `cat`), pe ambele noduri posibile.
+            append("echo $BATT; ")
+            listOf("battery", "mmi_battery").forEach { node ->
+                append("grep -H . ")
+                BATTERY_FIELDS.forEach { field ->
+                    append("/sys/class/power_supply/$node/$field ")
+                }
+                append("2>/dev/null; ")
+            }
+            append("true")
         }
     }
 }

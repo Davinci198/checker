@@ -24,6 +24,7 @@ import ro.davinci.checker.MainActivity
 import ro.davinci.checker.R
 import ro.davinci.checker.data.AppLists
 import ro.davinci.checker.data.AppScanner
+import ro.davinci.checker.data.BatteryLog
 import ro.davinci.checker.data.LiveProbe
 import ro.davinci.checker.data.LiveSample
 import ro.davinci.checker.shell.ShellBackend
@@ -48,6 +49,7 @@ class CpuWatchService : Service() {
     private val controller by lazy { ShellController(applicationContext) }
     private val scanner by lazy { AppScanner(applicationContext) }
     private val lists by lazy { AppLists(applicationContext) }
+    private val batteryLog by lazy { BatteryLog(applicationContext) }
 
     private var job: Job? = null
 
@@ -107,6 +109,13 @@ class CpuWatchService : Service() {
                 runCatching { probe.sample(backend) }.getOrNull()
             } ?: continue
             if (sample.error != null) continue
+
+            // Aceleași ore de încărcare ca în interfață: altfel, cu aplicația
+            // închisă, începutul încărcării s-ar pierde.
+            withContext(Dispatchers.IO) {
+                runCatching { batteryLog.seedFrom(backend) }
+                runCatching { batteryLog.update(sample.stats.battery) }
+            }
 
             val foreground = withContext(Dispatchers.IO) {
                 runCatching { scanner.foreground(backend) }.getOrNull()

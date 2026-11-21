@@ -106,6 +106,7 @@ import ro.davinci.checker.SortMode
 import ro.davinci.checker.UiState
 import ro.davinci.checker.data.AppEntry
 import ro.davinci.checker.data.AppLists
+import ro.davinci.checker.data.BatteryStats
 import ro.davinci.checker.data.BloatInfo
 import ro.davinci.checker.data.BloatVerdict
 import ro.davinci.checker.data.IconCache
@@ -242,6 +243,10 @@ fun CheckerApp(vm: CheckerViewModel) {
                     onToggleCpuWatch = vm::setCpuWatch,
                     onShowHot = { vm.setFilter(AppFilter.HOT) },
                 )
+            }
+
+            ui.stats.battery?.takeIf { it.valid }?.let { battery ->
+                BatteryCard(battery)
             }
 
             OutlinedTextField(
@@ -692,6 +697,102 @@ private fun StatsCard(
             }
         }
     }
+}
+
+/**
+ * Bateria: procentul de acum, capacitatea din fabrică și orele la care au
+ * început încărcarea și descărcarea — cu procentul de la care au pornit.
+ *
+ * Orele vin din [ro.davinci.checker.data.BatteryLog], care le reține la prima
+ * eșantionare ce vede schimbarea statusului. De aceea textul spune „începută la”,
+ * nu „începută exact la”: dacă aplicația dormea la schimbare, ora e cea a primei
+ * observații.
+ */
+@Composable
+private fun BatteryCard(battery: BatteryStats) {
+    val now = System.currentTimeMillis()
+
+    val lines = buildList {
+        if (battery.charging) {
+            if (battery.chargeStartedAt > 0L) {
+                val duration = battery.chargeDurationLabel(now)
+                add(
+                    "Încărcare începută la ${BatteryStats.clock(battery.chargeStartedAt)}, " +
+                        "de la ${battery.chargeStartedPercent}%" +
+                        if (duration.isBlank()) "" else " · de $duration",
+                )
+            }
+        } else {
+            if (battery.dischargeStartedAt > 0L) {
+                val duration = battery.dischargeDurationLabel(now)
+                add(
+                    "Descărcare începută la ${BatteryStats.clock(battery.dischargeStartedAt)}, " +
+                        "de la ${battery.dischargeStartedPercent}%" +
+                        if (duration.isBlank()) "" else " · de $duration",
+                )
+            }
+            lastChargeLine(battery)?.let { line -> add(line) }
+        }
+
+        val cycles = if (battery.cycles > 0) " · ${battery.cycles} cicluri" else ""
+        add("Din fabrică ${battery.designLabel} · acum ${battery.fullLabel}$cycles")
+        add("${battery.currentLabel} · ${battery.tempLabel}")
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+        ),
+        shape = RoundedCornerShape(14.dp),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = "Baterie",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = "${battery.percent}%",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (battery.charging) CheckerGreen else MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = " · ${battery.statusLabel}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            lines.forEach { line ->
+                Text(
+                    text = line,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+        }
+    }
+}
+
+/** „Ultima încărcare: 07:10 → 08:02 (52 min), de la 42% la 100%”. */
+private fun lastChargeLine(battery: BatteryStats): String? {
+    if (battery.charging) return null
+    if (battery.chargeStartedAt <= 0L) return null
+    // Capătul încărcării: momentul în care a ajuns plină sau, dacă a fost
+    // scoasă din priză mai devreme, momentul începerii descărcării.
+    val end = when {
+        battery.chargedFullAt > 0L -> battery.chargedFullAt
+        battery.dischargeStartedAt > battery.chargeStartedAt -> battery.dischargeStartedAt
+        else -> return null
+    }
+    val duration = BatteryStats.formatDuration(end - battery.chargeStartedAt)
+    val target = if (battery.chargedFullAt > 0L) "100%" else "${battery.dischargeStartedPercent}%"
+    return "Ultima încărcare: ${BatteryStats.clock(battery.chargeStartedAt)} → " +
+        "${BatteryStats.clock(end)} ($duration), de la ${battery.chargeStartedPercent}% la $target"
 }
 
 /** Pe Android 13+ notificările cer permisiune explicită. */
