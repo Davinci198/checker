@@ -11,6 +11,7 @@ import androidx.core.content.ContextCompat
 import androidx.compose.foundation.ExperimentalFoundationApi
 import android.os.Build
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -88,6 +90,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.text.font.FontWeight
@@ -158,7 +162,8 @@ fun CheckerApp(vm: CheckerViewModel) {
     }
 
     Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
+        modifier = Modifier.premiumGlow(),
+        containerColor = Color.Transparent,
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
             if (ui.selecting) {
@@ -186,18 +191,33 @@ fun CheckerApp(vm: CheckerViewModel) {
             } else {
                 TopAppBar(
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.background,
+                        containerColor = Color.Transparent,
                     ),
                     title = {
-                        Column {
-                            Text("Checker", fontWeight = FontWeight.SemiBold)
-                            Text(
-                                text = connectionLine(ui),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Brush.linearGradient(Premium.Gradient)),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text("✓", color = Color.White, fontWeight = FontWeight.ExtraBold)
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Column {
+                                GradientText(
+                                    text = "Checker",
+                                    style = MaterialTheme.typography.titleLarge,
+                                )
+                                Text(
+                                    text = connectionLine(ui),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Premium.Muted,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                     },
                     actions = {
@@ -252,9 +272,9 @@ fun CheckerApp(vm: CheckerViewModel) {
             OutlinedTextField(
                 value = ui.query,
                 onValueChange = vm::setQuery,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
                 singleLine = true,
-                placeholder = { Text("Caută după nume sau pachet") },
+                placeholder = { Text("Caută aplicație sau pachet…", color = Premium.Muted) },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 trailingIcon = {
                     if (ui.query.isNotEmpty()) {
@@ -263,11 +283,11 @@ fun CheckerApp(vm: CheckerViewModel) {
                         }
                     }
                 },
-                shape = RoundedCornerShape(14.dp),
+                shape = RoundedCornerShape(18.dp),
             )
 
             LazyRow(
-                contentPadding = PaddingValues(horizontal = 16.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 items(AppFilter.entries.toList()) { filter ->
@@ -300,7 +320,7 @@ fun CheckerApp(vm: CheckerViewModel) {
                         "și fără rol critic (lansator, tastatură, telefon, SMS).",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
 
@@ -314,7 +334,7 @@ fun CheckerApp(vm: CheckerViewModel) {
                         "pe toate dintr-un singur tap.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
 
@@ -324,7 +344,7 @@ fun CheckerApp(vm: CheckerViewModel) {
                         "verde = poate fi eliminat, roșu = nu. Listează doar ce e instalat acum.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
 
@@ -526,13 +546,11 @@ private fun StatsCard(
 ) {
     val stats = ui.stats
     Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-        ),
-        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp).premiumCard(),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        shape = Premium.Shape,
     ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -625,10 +643,20 @@ private fun StatsCard(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (stats.heatLevel == 2) {
+            }
+            if (stats.heatLevel == 2) {
+                Spacer(Modifier.height(10.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(CheckerRed.copy(alpha = 0.10f))
+                        .border(1.dp, CheckerRed.copy(alpha = 0.28f), RoundedCornerShape(14.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                ) {
                     Text(
-                        text = "· prea cald, telefonul frânează",
-                        style = MaterialTheme.typography.labelSmall,
+                        text = "⚠️ Prea cald — telefonul frânează",
+                        style = MaterialTheme.typography.bodySmall,
                         fontWeight = FontWeight.SemiBold,
                         color = CheckerRed,
                     )
@@ -668,7 +696,12 @@ private fun StatsCard(
                 if (granted) onToggleCpuWatch(true)
             }
             Row(
-                modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 10.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Premium.Green.copy(alpha = 0.07f))
+                    .padding(12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(modifier = Modifier.weight(1f)) {
@@ -740,13 +773,11 @@ private fun BatteryCard(battery: BatteryStats) {
     }
 
     Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-        ),
-        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp).premiumCard(),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        shape = Premium.Shape,
     ) {
-        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+        Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = "Baterie",
@@ -754,18 +785,40 @@ private fun BatteryCard(battery: BatteryStats) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f),
                 )
-                Text(
+                GradientText(
                     text = "${battery.percent}%",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (battery.charging) CheckerGreen else MaterialTheme.colorScheme.onSurface,
+                    style = MaterialTheme.typography.headlineSmall,
+                    colors = if (battery.charging) {
+                        listOf(Premium.Green, Color(0xFF86EFAC))
+                    } else {
+                        Premium.Gradient
+                    },
                 )
                 Text(
                     text = " · ${battery.statusLabel}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = Premium.Muted,
                 )
             }
+            Spacer(Modifier.height(12.dp))
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(10.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color.White.copy(alpha = 0.08f)),
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(battery.percent.coerceIn(0, 100) / 100f)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(50))
+                        .background(
+                            Brush.horizontalGradient(listOf(Premium.Green, Color(0xFFFACC15))),
+                        ),
+                )
+            }
+            Spacer(Modifier.height(12.dp))
             lines.forEach { line ->
                 Text(
                     text = line,
@@ -837,11 +890,10 @@ private fun SparkBlock(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f),
             )
-            Text(
+            GradientText(
                 text = value,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = color,
+                style = MaterialTheme.typography.titleLarge,
+                colors = listOf(color.copy(alpha = 0.72f), color),
             )
         }
         Sparkline(values = values, max = max, color = color)
@@ -858,11 +910,11 @@ private fun connectionLine(ui: UiState): String = when (val state = ui.connectio
 @Composable
 private fun ConnectionCard(ui: UiState, onConfigure: () -> Unit) {
     Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp).premiumCard(),
+        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
+        shape = Premium.Shape,
     ) {
-        Column(modifier = Modifier.padding(14.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -1102,20 +1154,28 @@ private fun AppRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .shadow(6.dp, Premium.Shape)
+            .background(Premium.Surface, Premium.Shape)
             .background(
-                if (selected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f)
-                else Color.Transparent,
+                if (selected) Premium.Blue.copy(alpha = 0.16f) else Color.Transparent,
+                Premium.Shape,
             )
-            .padding(horizontal = 16.dp, vertical = 9.dp),
+            .border(
+                1.dp,
+                if (selected) Premium.Blue.copy(alpha = 0.5f) else Premium.Border,
+                Premium.Shape,
+            )
+            .padding(horizontal = 14.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         if (selecting) {
             Checkbox(checked = selected, onCheckedChange = { onClick() })
         }
 
-        AppIcon(icon, app.label)
+        AppIcon(icon, app.label, size = 50.dp)
 
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
